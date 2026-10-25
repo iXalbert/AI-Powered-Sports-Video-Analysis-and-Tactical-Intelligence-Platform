@@ -11,7 +11,7 @@ Analiza meciurilor de sport pe baza înregistrărilor video necesită în mod tr
 
 Această platformă automatizează procesul prin procesarea secvențelor video, detectarea și urmărirea jucătorilor (player tracking), extragerea de evenimente-cheie (key events) și generarea automată de rapoarte tactice în limbaj natural.
 
-### Obiectivele Proiectului (3-5 Obiective)
+### Obiectivele Proiectului 
 1. **Pipeline de procesare video cap-la-cap:** Construirea unui sistem integrat (Upload $\rightarrow$ Detectare/Tracking $\rightarrow$ Analitică $\rightarrow$ Raport AI) pentru un sport selectat (ex: fotbal, baschet, handbal).
 2. **Generare de analiză vizuală și statistici deterministe:** Calcularea mecanică (fără LLM) a minim 3-4 tipuri de evenimente și generarea de vizualizări specifice (mărci de traiectorie, hărți de căldură / heatmaps, timeline de meci).
 3. **Sinteză tactică bazată pe ML/LLM/VLM:** Utilizarea modelelor de viziune și limbaj (Vision-Language & Large Language Models) pentru explicarea contextului vizual și redactarea de observații tactice ancorate strict în date reale.
@@ -29,6 +29,7 @@ Sistemele comerciale de analiză sportivă folosesc de obicei echipamente specia
 * **[Roboflow Supervision](https://github.com/roboflow/supervision):** Set de instrumente reutilizabile pentru procesare de cadre, desenare de overlays, Zone Analytics și numărare de entități.
 * **[OpenCV](https://opencv.org/) & [FFmpeg](https://ffmpeg.org/):** Librării fundamentale pentru decodare video, sampling de cadre și manipulare spațio-temporală.
 * **Modele VLM / LLM (ex: OpenAI GPT-4o, Google Gemini, Anthropic Claude):** Utilizate pentru interpretarea semantică a cadrelor extras și structurarea rezumatelor explicative.
+* **[FlashScore](https://www.flashscore.ro):** Aplicație de sporturi ce generează output-uri similare cu cele ale aplicației noastre.
 
 ### Cu ce este mai bun acest proiect?
 Spre deosebire de soluțiile clasice de Computer Vision (care oferă doar metrice brute precum hărți de căldură) sau de abordările pur LLM (care pot fi susceptibile la halucinații), această aplicație combină **analitica deterministă** cu **raționamentul multimodal (VLM/LLM)**. Modelul de limbaj primește ca date de intrare doar statistici verified și cadre-cheie, garantând că observațiile tactice sunt complet ancorate în date concrete.
@@ -93,7 +94,7 @@ Evaluarea aplicației se bazează pe experimente controlate folosind un set redu
 * **Unit Testing:** Teste unitare pentru modulele deterministe de calcul al statisticilor, parsarea metadatelor video, algoritmul de agregare a pozițiilor și generarea structurilor de date JSON.
 * **System / End-to-End Testing:** Verificarea pipeline-ului complet de la încărcarea fișierului până la popularea dashboard-ului.
 
-### Evaluări și Metrici (3 Evaluări Directe)
+### Evaluări și Metrici
 1. **Acuratețea detecției și a evenimentelor (CV Accuracy):** Compararea numărului și a marjei temporale (timestamp tolerance) pentru evenimentele detectate automat față de adnotările manuale din setul de test.
 2. **Performanță și Latență (Latency & Throughput):** Măsurarea timpului total de procesare ($E2E$ latency) și a cadrelor procesate pe secundă (FPS) pentru fișiere cu rezoluții și durate diferite (ex: 720p vs 1080p).
 3. **Calitatea rezumatelor tactice (Human Rubric Evaluation):** Evaluarea rezumatului generat de VLM/LLM de către un evaluator uman pe baza unei rubrici cu 3 criterii: *Corectitudine factuală*, *Relevanță tactică* și *Utilitate*.
