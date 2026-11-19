@@ -1,0 +1,16 @@
+# Secrets
+.env
+
+# Storage (ignore everything except .gitkeep)
+storage/*
+!storage/.gitkeep
+
+# Model weights
+*.pt
+
+# Python & IDEs
+__pycache__/
+*.py[cod]
+.idea/
+.agents/
+.claude/
