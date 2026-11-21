@@ -6,6 +6,7 @@ import numpy as np
 import supervision as sv
 from ultralytics import YOLO
 from backend.team_classifier import TeamClassifier
+from backend.pitch_radar import draw_2d_pitch_canvas, render_live_radar_frame
 
 
 class VideoAnalysisPipeline:
@@ -76,9 +77,18 @@ class VideoAnalysisPipeline:
         output_video_path = os.path.join(session_dir, "annotated_video.mp4")
         metadata_path = os.path.join(session_dir, "tracking_data.json")
 
+        # Pregătim dimensiunile pentru Top-Bottom View (Video sus + Radar 2D orizontal jos)
+        radar_w = video_info.width
+        radar_h = max(220, int(video_info.height * 0.42))
+        base_pitch = draw_2d_pitch_canvas(width=radar_w, height=radar_h)
+        combined_h = video_info.height + radar_h
+
         tracking_records = []
         track_team_votes = {}
         last_positions = {}
+        ball_detections_count = 0
+        last_ball_pos = None
+        ball_missing_streak = 0
 
         team_metrics = {
             0: {"name": team_names[0], "zone_counts": {"left": 0, "center": 0, "right": 0}, "player_distances": {}, "x_positions": [], "attacking_frames": 0},
@@ -89,7 +99,7 @@ class VideoAnalysisPipeline:
         cap = cv2.VideoCapture(input_path)
         cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
         fourcc = cv2.VideoWriter_fourcc(*'avc1')
-        out = cv2.VideoWriter(output_video_path, fourcc, fps, (video_info.width, video_info.height))
+        out = cv2.VideoWriter(output_video_path, fourcc, fps, (video_info.width, combined_h))
 
         frame_idx = start_frame
         processed_count = 0
@@ -99,23 +109,52 @@ class VideoAnalysisPipeline:
             if not ret:
                 break
 
-            results = self.model.track(frame, persist=True, tracker="bytetrack.yaml", device=self.device, verbose=False)[0]
-            detections = sv.Detections.from_ultralytics(results)
-            detections = detections[detections.class_id == 0]
+            # Detectăm atât persoane (clasa 0) cât și mingea (clasa 32)
+            results = self.model.track(
+                frame,
+                persist=True,
+                tracker="bytetrack.yaml",
+                classes=[0, 32],
+                conf=0.18,
+                device=self.device,
+                verbose=False
+            )[0]
+            all_dets = sv.Detections.from_ultralytics(results)
+
+            player_dets = all_dets[all_dets.class_id == 0]
+            ball_dets = all_dets[all_dets.class_id == 32]
+
+            # Procesăm mingea
+            current_ball_pos = None
+            if len(ball_dets) > 0:
+                best_b_idx = int(np.argmax(ball_dets.confidence)) if ball_dets.confidence is not None else 0
+                b_xyxy = ball_dets.xyxy[best_b_idx]
+                bx = float((b_xyxy[0] + b_xyxy[2]) / 2)
+                by = float((b_xyxy[1] + b_xyxy[3]) / 2)
+                current_ball_pos = (bx, by)
+                last_ball_pos = current_ball_pos
+                ball_missing_streak = 0
+                ball_detections_count += 1
+            elif last_ball_pos is not None and ball_missing_streak < 8:
+                current_ball_pos = last_ball_pos
+                ball_missing_streak += 1
 
             frame_record = {
                 "frame_index": frame_idx,
                 "timestamp_sec": round(frame_idx / fps, 2),
                 "attacking_team": None,
                 "defending_team": None,
+                "attack_flank": None,
+                "ball_position": [round(current_ball_pos[0], 2), round(current_ball_pos[1], 2)] if current_ball_pos else None,
                 "players": []
             }
 
             team_frame_x = {0: [], 1: []}
+            team_player_coords = {0: [], 1: []}
             annotated = frame.copy()
 
-            for i, xyxy in enumerate(detections.xyxy):
-                tid = int(detections.tracker_id[i]) if detections.tracker_id is not None else None
+            for i, xyxy in enumerate(player_dets.xyxy):
+                tid = int(player_dets.tracker_id[i]) if player_dets.tracker_id is not None else None
                 raw_team, color_bgr = team_classifier.predict(frame, xyxy)
 
                 if tid is not None:
@@ -134,6 +173,7 @@ class VideoAnalysisPipeline:
 
                 if stable_team in (0, 1):
                     team_frame_x[stable_team].append(cx)
+                    team_player_coords[stable_team].append((cx, by))
                     team_metrics[stable_team]["x_positions"].append(cx)
 
                     if tid is not None:
@@ -159,20 +199,40 @@ class VideoAnalysisPipeline:
                     "position": [round(cx, 2), round(by, 2)]
                 })
 
-            avg_x_0 = sum(team_frame_x[0]) / len(team_frame_x[0]) if team_frame_x[0] else None
-            avg_x_1 = sum(team_frame_x[1]) / len(team_frame_x[1]) if team_frame_x[1] else None
+            # Desenăm mingea pe video
+            if current_ball_pos is not None:
+                bx_i, by_i = int(current_ball_pos[0]), int(current_ball_pos[1])
+                cv2.circle(annotated, (bx_i, by_i), 10, (0, 230, 255), 2)
+                cv2.putText(annotated, "BALL", (bx_i + 10, by_i - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 230, 255), 2)
 
-            if avg_x_0 is not None and avg_x_1 is not None:
+            # Determinăm echipa în atac (combinând proximitatea mingii + deschiderea spațială a echipei)
+            att_id = None
+            if current_ball_pos is not None and team_player_coords[0] and team_player_coords[1]:
+                min_d0 = min(np.hypot(px - current_ball_pos[0], py - current_ball_pos[1]) for px, py in team_player_coords[0])
+                min_d1 = min(np.hypot(px - current_ball_pos[0], py - current_ball_pos[1]) for px, py in team_player_coords[1])
+                att_id = 0 if min_d0 <= min_d1 else 1
+            elif team_frame_x[0] and team_frame_x[1]:
                 spread_0 = max(team_frame_x[0]) - min(team_frame_x[0])
                 spread_1 = max(team_frame_x[1]) - min(team_frame_x[1])
                 att_id = 0 if spread_0 >= spread_1 else 1
-                def_id = 1 - att_id
 
+            if att_id is not None:
+                def_id = 1 - att_id
                 team_metrics[att_id]["attacking_frames"] += 1
                 frame_record["attacking_team"] = team_names[att_id]
                 frame_record["defending_team"] = team_names[def_id]
 
+            # Determinăm flancul curent
             third = video_info.width / 3
+            ref_x = current_ball_pos[0] if current_ball_pos is not None else None
+            if ref_x is not None:
+                if ref_x < third:
+                    frame_record["attack_flank"] = "Stânga"
+                elif ref_x < 2 * third:
+                    frame_record["attack_flank"] = "Centru"
+                else:
+                    frame_record["attack_flank"] = "Dreapta"
+
             for t_id in (0, 1):
                 if team_frame_x[t_id]:
                     tx = sum(team_frame_x[t_id]) / len(team_frame_x[t_id])
@@ -184,13 +244,20 @@ class VideoAnalysisPipeline:
                         team_metrics[t_id]["zone_counts"]["right"] += 1
 
             total_players_frame = len(team_frame_x[0]) + len(team_frame_x[1])
-            if total_players_frame >= 6 and processed_count % int(fps * 2) == 0 and frame_record["attacking_team"]:
+            if total_players_frame >= 5 and processed_count % int(fps * 3) == 0 and frame_record["attacking_team"]:
+                flank_str = frame_record["attack_flank"] or (
+                    "Stânga" if (sum(team_frame_x[att_id]) / len(team_frame_x[att_id])) < third else
+                    ("Centru" if (sum(team_frame_x[att_id]) / len(team_frame_x[att_id])) < 2 * third else "Dreapta")
+                )
                 timeline_events.append({
+                    "event_id": len(timeline_events) + 1,
                     "frame_index": frame_idx,
                     "timestamp_sec": frame_record["timestamp_sec"],
                     "attacking_team": frame_record["attacking_team"],
                     "defending_team": frame_record["defending_team"],
-                    "players_count": total_players_frame
+                    "flank": flank_str,
+                    "players_count": total_players_frame,
+                    "label": f"Faza #{len(timeline_events) + 1} ({frame_record['timestamp_sec']}s) — Atac {frame_record['attacking_team']} pe {flank_str}"
                 })
 
             if frame_record["attacking_team"]:
@@ -198,9 +265,21 @@ class VideoAnalysisPipeline:
                 cv2.rectangle(annotated, (10, 10), (540, 42), (20, 20, 20), -1)
                 cv2.putText(annotated, phase_banner, (20, 32), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 2)
 
-            out.write(annotated)
-            tracking_records.append(frame_record)
+            # Randăm cadrul 2D live și îl lipim în dreapta imaginii video
+            radar_frame = render_live_radar_frame(
+                base_pitch=base_pitch,
+                players=frame_record["players"],
+                ball_pos=current_ball_pos,
+                frame_w=video_info.width,
+                frame_h=video_info.height,
+                team_colors_bgr=team_classifier.team_colors_bgr,
+                team_names=team_names,
+                attacking_team=frame_record["attacking_team"]
+            )
+            combined_frame = np.vstack((annotated, radar_frame))
+            out.write(combined_frame)
 
+            tracking_records.append(frame_record)
             frame_idx += 1
             processed_count += 1
             if progress_callback and processed_count % 15 == 0:
@@ -240,7 +319,8 @@ class VideoAnalysisPipeline:
                 "fps": fps,
                 "start_sec": round(start_frame / fps, 1),
                 "end_sec": round(frame_idx / fps, 1),
-                "analyzed_seconds": round(processed_count / fps, 1)
+                "analyzed_seconds": round(processed_count / fps, 1),
+                "ball_detected_frames": ball_detections_count
             },
             "teams": teams_summary,
             "timeline_events": timeline_events,

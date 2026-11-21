@@ -3,12 +3,53 @@ import cv2
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+from backend.pitch_radar import generate_2d_tactical_pitch_map
+
+
+def extract_10s_clip(video_path: str, center_sec: float, output_clip_path: str, window_half: float = 5.0) -> bool:
+    """
+    Decupează un clip MP4 de 10 secunde (5s înainte + 5s după center_sec) din videoclipul adnotat.
+    """
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        return False
+
+    fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+    start_f = max(0, int((center_sec - window_half) * fps))
+    end_f = min(total_frames, int((center_sec + window_half) * fps))
+
+    if end_f <= start_f:
+        cap.release()
+        return False
+
+    fourcc = cv2.VideoWriter_fourcc(*'avc1')
+    out = cv2.VideoWriter(output_clip_path, fourcc, fps, (w, h))
+
+    cap.set(cv2.CAP_PROP_POS_FRAMES, start_f)
+    curr = start_f
+    while cap.isOpened() and curr < end_f:
+        ret, frame = cap.read()
+        if not ret:
+            break
+        out.write(frame)
+        curr += 1
+
+    cap.release()
+    out.release()
+    return os.path.exists(output_clip_path)
 
 
 def generate_visual_analytics(stats: dict, input_video_path: str, session_dir: str) -> dict:
     teams = stats["teams"]
-    team_coords = {0: {"x": [], "y": []}, 1: {"x": [], "y": []}}
+    fw = stats["video_info"]["width"]
+    fh = stats["video_info"]["height"]
+    annotated_video_path = os.path.join(session_dir, "annotated_video.mp4")
 
+    team_coords = {0: {"x": [], "y": []}, 1: {"x": [], "y": []}}
     for frame in stats["frames"]:
         for p in frame["players"]:
             tid = p.get("team_id")
@@ -16,25 +57,23 @@ def generate_visual_analytics(stats: dict, input_video_path: str, session_dir: s
                 team_coords[tid]["x"].append(p["position"][0])
                 team_coords[tid]["y"].append(p["position"][1])
 
+    # Generăm Hărțile Tactice 2D ale terenului pentru fiecare echipă
     heatmap_urls = {}
     for t_id in (0, 1):
         t_info = teams[str(t_id)]
-        h_filename = f"heatmap_team_{t_id}.png"
+        h_filename = f"pitch_2d_team_{t_id}.png"
         h_path = os.path.join(session_dir, h_filename)
-
-        plt.figure(figsize=(8, 4.5))
-        if team_coords[t_id]["x"]:
-            plt.hexbin(team_coords[t_id]["x"], team_coords[t_id]["y"], gridsize=25, cmap='YlOrRd', mincnt=1)
-            plt.colorbar(label='Densitate Jucători')
-        plt.gca().invert_yaxis()
-        plt.title(f"Heatmap Pozițional — {t_info['name']}")
-        plt.xlabel("Lățime Teren (px)")
-        plt.ylabel("Adâncime Teren (px)")
-        plt.tight_layout()
-        plt.savefig(h_path)
-        plt.close()
+        generate_2d_tactical_pitch_map(
+            coords_x=team_coords[t_id]["x"],
+            coords_y=team_coords[t_id]["y"],
+            frame_w=fw,
+            frame_h=fh,
+            team_name=t_info["name"],
+            save_path=h_path
+        )
         heatmap_urls[str(t_id)] = h_filename
 
+    # Timeline dinamică atac/apărare
     timeline_path = os.path.join(session_dir, "timeline.png")
     events = stats["timeline_events"]
     t0_name = teams["0"]["name"]
@@ -61,6 +100,7 @@ def generate_visual_analytics(stats: dict, input_video_path: str, session_dir: s
     plt.savefig(timeline_path)
     plt.close()
 
+    # Extragem primele 3 momente cheie atât ca imagine, cât și ca clip video de 10s (5s înainte + 5s după)
     key_frames = []
     top_events = sorted(events, key=lambda x: x["players_count"], reverse=True)[:3]
     cap = cv2.VideoCapture(input_video_path)
@@ -72,11 +112,19 @@ def generate_visual_analytics(stats: dict, input_video_path: str, session_dir: s
             img_filename = f"key_moment_{idx+1}.jpg"
             img_path = os.path.join(session_dir, img_filename)
             cv2.imwrite(img_path, frame)
+
+            clip_filename = f"key_clip_{idx+1}.mp4"
+            clip_path = os.path.join(session_dir, clip_filename)
+            rel_sec = max(0.0, ev["timestamp_sec"] - start_s)
+            has_clip = extract_10s_clip(annotated_video_path, rel_sec, clip_path, window_half=5.0)
+
             key_frames.append({
                 "filename": img_filename,
+                "clip_filename": clip_filename if has_clip else None,
                 "path": img_path,
                 "timestamp_sec": ev["timestamp_sec"],
                 "attacking_team": ev["attacking_team"],
+                "flank": ev.get("flank", "Centru"),
                 "players_count": ev["players_count"]
             })
     cap.release()

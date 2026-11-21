@@ -8,7 +8,7 @@ from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
 
 from backend.pipeline import VideoAnalysisPipeline
-from backend.analytics import generate_visual_analytics
+from backend.analytics import generate_visual_analytics, extract_10s_clip
 from backend.llm_service import generate_tactical_report
 from backend.youtube_service import download_youtube_video
 from backend.benchmark import run_full_benchmark, BENCHMARK_DIR
@@ -76,8 +76,10 @@ def run_analysis_job(
                 "key_frames": [
                     {
                         "url": f"/files/{session_id}/{kf['filename']}",
+                        "clip_url": f"/files/{session_id}/{kf['clip_filename']}" if kf.get("clip_filename") else None,
                         "timestamp_sec": kf["timestamp_sec"],
                         "attacking_team": kf["attacking_team"],
+                        "flank": kf.get("flank", "Centru"),
                         "players_count": kf["players_count"]
                     } for kf in visuals["key_frames"]
                 ]
@@ -161,6 +163,63 @@ async def start_analysis(
     )
 
     return {"session_id": session_id, "message": "Analysis started"}
+
+
+@app.get("/api/sessions")
+def list_saved_sessions():
+    """Returnează toate analizele salvate în storage/ pentru reîncărcare instantă."""
+    sessions = []
+    if not os.path.exists(STORAGE_DIR):
+        return sessions
+    for name in sorted(os.listdir(STORAGE_DIR), reverse=True):
+        res_file = os.path.join(STORAGE_DIR, name, "final_result.json")
+        if os.path.exists(res_file):
+            try:
+                with open(res_file, "r") as f:
+                    d = json.load(f)
+                t0 = d["stats"]["teams"]["0"]["name"]
+                t1 = d["stats"]["teams"]["1"]["name"]
+                sessions.append({
+                    "session_id": name,
+                    "label": f"{d.get('video_title', 'Clip')} — {t0} vs {t1} ({name})"
+                })
+            except Exception:
+                pass
+    return sessions
+
+
+@app.post("/api/extract_phase/{session_id}")
+def extract_custom_phase_clip(session_id: str, timestamp_sec: float = Form(...)):
+    """
+    Decupează la cerere o fază de 10 secunde (5s înainte + 5s după timestamp_sec)
+    din videoclipul adnotat (cu tot cu radarul 2D live).
+    """
+    session_dir = os.path.join(STORAGE_DIR, session_id)
+    annotated_video = os.path.join(session_dir, "annotated_video.mp4")
+    result_file = os.path.join(session_dir, "final_result.json")
+
+    if not os.path.exists(annotated_video) or not os.path.exists(result_file):
+        raise HTTPException(status_code=404, detail="Sesiunea nu a fost găsită.")
+
+    with open(result_file, "r") as f:
+        res_data = json.load(f)
+
+    start_offset = res_data["stats"]["video_info"].get("start_sec", 0.0)
+    rel_sec = max(0.0, timestamp_sec - start_offset)
+
+    clip_name = f"phase_{int(timestamp_sec * 10)}.mp4"
+    clip_path = os.path.join(session_dir, clip_name)
+
+    if not os.path.exists(clip_path):
+        ok = extract_10s_clip(annotated_video, rel_sec, clip_path, window_half=5.0)
+        if not ok:
+            raise HTTPException(status_code=400, detail="Nu s-a putut extrage secvența video.")
+
+    return {
+        "clip_url": f"/files/{session_id}/{clip_name}",
+        "window_start": round(max(start_offset, timestamp_sec - 5.0), 1),
+        "window_end": round(timestamp_sec + 5.0, 1)
+    }
 
 
 @app.get("/api/status/{session_id}")

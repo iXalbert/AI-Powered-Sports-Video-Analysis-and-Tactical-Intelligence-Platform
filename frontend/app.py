@@ -8,6 +8,26 @@ API_URL = "http://127.0.0.1:8000"
 st.set_page_config(page_title="AI Sports Tactical Intelligence", layout="wide")
 st.title("⚽ AI Sports Video Analysis & Tactical Intelligence")
 
+# Sidebar pentru Istoric Sesiuni Salvate
+with st.sidebar:
+    st.header("🗂️ Istoric Meciuri Analizate")
+    try:
+        saved_sessions = requests.get(f"{API_URL}/api/sessions", timeout=2).json()
+    except Exception:
+        saved_sessions = []
+
+    if saved_sessions:
+        session_map = {s["label"]: s["session_id"] for s in saved_sessions}
+        chosen_label = st.selectbox("Încarcă o analiză salvată:", list(session_map.keys()))
+        if st.button("📂 Deschide Analiza", use_container_width=True):
+            sid = session_map[chosen_label]
+            st.session_state["results"] = requests.get(f"{API_URL}/api/results/{sid}").json()
+            st.session_state["last_session_id"] = sid
+            st.session_state["swapped"] = False
+            st.session_state.pop("active_phase_clip", None)
+    else:
+        st.caption("Nicio analiză salvată încă.")
+
 tab_match, tab_bench = st.tabs(["🎥 Analiză Tactică Meci", "📊 Benchmark & Evaluare Licență"])
 
 # ==========================================
@@ -74,6 +94,7 @@ with tab_match:
             if state == "completed":
                 st.session_state["results"] = requests.get(f"{API_URL}/api/results/{session_id}").json()
                 st.session_state["swapped"] = False
+                st.session_state.pop("active_phase_clip", None)
                 break
             elif state == "failed":
                 st.error(f"Eroare la procesare: {status_res.get('error')}")
@@ -85,15 +106,98 @@ with tab_match:
         stats = data["stats"]
         visuals = data["visuals"]
         report = data["tactical_report"]
+        sid = data["session_id"]
 
         st.divider()
-        st.markdown(f"### 📋 Meci analizat: **{data.get('video_title', 'Match Clip')}** (ID sesiune: `{data['session_id']}`)")
+        ball_frames = stats["video_info"].get("ball_detected_frames", 0)
+        st.markdown(
+            f"### 📋 Meci analizat: **{data.get('video_title', 'Match Clip')}** "
+            f"(ID: `{sid}` | Cadre minge detectată: `{ball_frames}`)"
+        )
 
-        st.subheader("🎥 Tracking Echipe, Culoare Tricouri & Faze Atac / Apărare")
+        st.subheader("🎥 Tracking Live + Radar Tactic 2D Sincronizat")
         st.video(f"{API_URL}{visuals['video_url']}")
 
         st.divider()
 
+        # ==========================================
+        # EXPLORER FAZE 10s (5s INAINTE + 5s DUPA) & CAUTARE
+        # ==========================================
+        st.subheader("🎬 Explorer Faze & Momente (Secvențe de 10s: 5s înainte + 5s după)")
+        st.caption("Caută o fază după echipă/flanc sau alege orice moment (ex. înainte de un gol sau fault) pentru a viziona secvența de 10 secunde.")
+
+        events = stats.get("timeline_events", [])
+        f_col1, f_col2 = st.columns([2, 1])
+        with f_col1:
+            search_query = st.text_input(
+                "🔎 Caută în evenimente (ex. 'dreapta', 'stânga', 'centru' sau numele echipei):",
+                placeholder="ex: atac pe dreapta..."
+            ).strip().lower()
+        with f_col2:
+            flank_filter = st.selectbox("Filtru rapid flanc:", ["Toate flancurile", "Stânga", "Centru", "Dreapta"])
+
+        filtered_events = []
+        for ev in events:
+            lbl = ev.get("label", "").lower()
+            flk = ev.get("flank", "")
+            if flank_filter != "Toate flancurile" and flk != flank_filter:
+                continue
+            if search_query:
+                words = [w for w in search_query.split() if w not in ("pe", "de", "la", "din", "atac", "atacuri", "faza", "faze")]
+                if words and not any(w in lbl for w in words):
+                    continue
+            filtered_events.append(ev)
+
+        p_col1, p_col2 = st.columns(2)
+        with p_col1:
+            st.markdown("**1️⃣ Alege o fază detectată automat:**")
+            if filtered_events:
+                ev_map = {e["label"]: e["timestamp_sec"] for e in filtered_events}
+                chosen_ev = st.selectbox("Faze filtrate:", list(ev_map.keys()))
+                if st.button("▶️ Vezi Faza Selectată (10s)"):
+                    r = requests.post(f"{API_URL}/api/extract_phase/{sid}", data={"timestamp_sec": str(ev_map[chosen_ev])})
+                    if r.status_code == 200:
+                        st.session_state["active_phase_clip"] = r.json()
+            else:
+                st.info("Nicio fază nu corespunde filtrului curent.")
+
+        with p_col2:
+            st.markdown("**2️⃣ Sau sari la orice secundă din meci (Gol / Fault / Ocazie):**")
+            v_start = float(stats["video_info"].get("start_sec", 0.0))
+            v_end = float(stats["video_info"].get("end_sec", 30.0))
+            custom_sec = st.slider(
+                "Selectează secunda evenimentului (se decupează ±5s):",
+                min_value=v_start,
+                max_value=max(v_start + 1.0, v_end),
+                value=round((v_start + v_end) / 2, 1),
+                step=0.5
+            )
+            if st.button("✂️ Extrage Faza de 10s din jurul acestei secunde"):
+                r = requests.post(f"{API_URL}/api/extract_phase/{sid}", data={"timestamp_sec": str(custom_sec)})
+                if r.status_code == 200:
+                    st.session_state["active_phase_clip"] = r.json()
+
+        if "active_phase_clip" in st.session_state:
+            clip_info = st.session_state["active_phase_clip"]
+            st.success(f"Secvență extrasă: **{clip_info['window_start']}s — {clip_info['window_end']}s** (5s înainte + 5s după)")
+            st.video(f"{API_URL}{clip_info['clip_url']}")
+
+        if visuals["key_frames"]:
+            with st.expander("🏆 Top 3 Momente Cheie Extrase Automat (Clipuri 10s)", expanded=False):
+                kf_cols = st.columns(len(visuals["key_frames"]))
+                for idx, kf in enumerate(visuals["key_frames"]):
+                    with kf_cols[idx]:
+                        st.markdown(f"**Moment #{idx+1} — Sec {kf['timestamp_sec']}s** ({kf['attacking_team']} | {kf.get('flank', '')})")
+                        if kf.get("clip_url"):
+                            st.video(f"{API_URL}{kf['clip_url']}")
+                        else:
+                            st.image(f"{API_URL}{kf['url']}")
+
+        st.divider()
+
+        # ==========================================
+        # STATISTICI ECHIPE & HARTI TACTICE 2D
+        # ==========================================
         top_ctrl1, top_ctrl2 = st.columns([3, 1])
         with top_ctrl2:
             st.write("")
@@ -121,7 +225,7 @@ with tab_match:
                 ]
             )
 
-        def render_team_card(team_data, heatmap_url):
+        def render_team_card(team_data, pitch_map_url):
             st.markdown(
                 f"### {team_data['name']} "
                 f"<span style='background-color:{team_data['jersey_hex']};padding:2px 12px;border-radius:4px;border:1px solid #888;'>&nbsp;</span>",
@@ -138,7 +242,7 @@ with tab_match:
             d2.metric("Centru", f"{dist['center']}%")
             d3.metric("Dreapta", f"{dist['right']}%")
 
-            st.image(f"{API_URL}{heatmap_url}", caption=f"Heatmap {team_data['name']}")
+            st.image(f"{API_URL}{pitch_map_url}", caption=f"Hartă Tactică 2D Teren — {team_data['name']}")
 
             st.write("**Top Jucători Activi:**")
             for p in team_data["top_active_players"]:
@@ -167,16 +271,6 @@ with tab_match:
         for obs in report.get("key_observations", []):
             st.write(f"- {obs}")
         st.write(f"**Recomandare Antrenor:** {report.get('tactical_recommendation')}")
-
-        if visuals["key_frames"]:
-            st.subheader("📸 Momente Cheie Extrase Automat")
-            kf_cols = st.columns(len(visuals["key_frames"]))
-            for idx, kf in enumerate(visuals["key_frames"]):
-                with kf_cols[idx]:
-                    st.image(
-                        f"{API_URL}{kf['url']}",
-                        caption=f"Sec {kf['timestamp_sec']}s | Atac: {kf['attacking_team']}"
-                    )
 
 # ==========================================
 # TAB 2: BENCHMARK & EVALUARE LICENTA
