@@ -5,7 +5,64 @@ import streamlit as st
 
 API_URL = "http://127.0.0.1:8000"
 
-st.set_page_config(page_title="AI Sports Tactical Intelligence", layout="wide")
+st.set_page_config(
+    page_title="Tactical AI",
+    page_icon="⚽",
+    layout="wide",
+    initial_sidebar_state="collapsed"
+)
+
+# Optimizare iOS Web App (Add to Home Screen) + Responsive Mobile Layout
+st.markdown(
+    """
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Tactical AI">
+    <style>
+        .stButton > button {
+            min-height: 46px;
+            border-radius: 10px;
+            font-weight: 600;
+        }
+        video {
+            width: 100% !important;
+            border-radius: 12px;
+        }
+        @media (max-width: 768px) {
+            .block-container {
+                padding-top: 1.2rem;
+                padding-left: 0.8rem;
+                padding-right: 0.8rem;
+            }
+        }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
+
+
+def render_backend_video(relative_url: str):
+    if not relative_url:
+        return
+    try:
+        r = requests.get(f"{API_URL}{relative_url}")
+        if r.status_code == 200:
+            st.video(r.content)
+    except Exception as e:
+        st.error(f"Nu s-a putut încărca videoclipul: {e}")
+
+
+def render_backend_image(relative_url: str, caption: str = None):
+    if not relative_url:
+        return
+    try:
+        r = requests.get(f"{API_URL}{relative_url}")
+        if r.status_code == 200:
+            st.image(r.content, caption=caption, use_container_width=True)
+    except Exception as e:
+        st.error(f"Nu s-a putut încărca imaginea: {e}")
+
+
 st.title("⚽ AI Sports Video Analysis & Tactical Intelligence")
 
 # Sidebar pentru Istoric Sesiuni Salvate
@@ -116,7 +173,7 @@ with tab_match:
         )
 
         st.subheader("🎥 Tracking Live + Radar Tactic 2D Sincronizat")
-        st.video(f"{API_URL}{visuals['video_url']}")
+        render_backend_video(visuals["video_url"])
 
         st.divider()
 
@@ -180,7 +237,7 @@ with tab_match:
         if "active_phase_clip" in st.session_state:
             clip_info = st.session_state["active_phase_clip"]
             st.success(f"Secvență extrasă: **{clip_info['window_start']}s — {clip_info['window_end']}s** (5s înainte + 5s după)")
-            st.video(f"{API_URL}{clip_info['clip_url']}")
+            render_backend_video(clip_info["clip_url"])
 
         if visuals["key_frames"]:
             with st.expander("🏆 Top 3 Momente Cheie Extrase Automat (Clipuri 10s)", expanded=False):
@@ -189,9 +246,9 @@ with tab_match:
                     with kf_cols[idx]:
                         st.markdown(f"**Moment #{idx+1} — Sec {kf['timestamp_sec']}s** ({kf['attacking_team']} | {kf.get('flank', '')})")
                         if kf.get("clip_url"):
-                            st.video(f"{API_URL}{kf['clip_url']}")
+                            render_backend_video(kf["clip_url"])
                         else:
-                            st.image(f"{API_URL}{kf['url']}")
+                            render_backend_image(kf["url"])
 
         st.divider()
 
@@ -242,7 +299,7 @@ with tab_match:
             d2.metric("Centru", f"{dist['center']}%")
             d3.metric("Dreapta", f"{dist['right']}%")
 
-            st.image(f"{API_URL}{pitch_map_url}", caption=f"Hartă Tactică 2D Teren — {team_data['name']}")
+            render_backend_image(pitch_map_url, caption=f"Hartă Tactică 2D Teren — {team_data['name']}")
 
             st.write("**Top Jucători Activi:**")
             for p in team_data["top_active_players"]:
@@ -262,7 +319,7 @@ with tab_match:
         st.divider()
 
         st.subheader("📈 Timeline Dinamică Atac / Apărare")
-        st.image(f"{API_URL}{visuals['timeline_url']}")
+        render_backend_image(visuals["timeline_url"])
 
         st.divider()
 
@@ -350,5 +407,5 @@ with tab_bench:
         )
 
         st.subheader("📈 Grafice Comparative (salvate automat în folderul benchmarks/)")
-        st.image(f"{API_URL}{b_out['urls']['perf_chart']}", caption="Comparație FPS și Latență (MPS vs CPU / Modele)")
-        st.image(f"{API_URL}{b_out['urls']['acc_chart']}", caption="Comparație Detecție și Stabilitate Tracking")
+        render_backend_image(b_out["urls"]["perf_chart"], caption="Comparație FPS și Latență (MPS vs CPU / Modele)")
+        render_backend_image(b_out["urls"]["acc_chart"], caption="Comparație Detecție și Stabilitate Tracking")
