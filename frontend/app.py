@@ -111,12 +111,26 @@ with tab_match:
     else:
         youtube_url = st.text_input("Lipește link-ul YouTube al meciului/rezumatului:", placeholder="https://www.youtube.com/watch?v=...")
 
-    with st.expander("⏱️ Opțiuni interval analizat (opțional — util pentru rezumate lungi)", expanded=False):
+    with st.expander("⏱️ Opțiuni interval analizat & Model AI (opțional)", expanded=False):
         t_col1, t_col2 = st.columns(2)
         with t_col1:
             start_sec = st.number_input("Secunda de start", min_value=0, value=0, step=5)
         with t_col2:
             duration_sec = st.number_input("Durată analizată (secunde, 0 = tot clipul / max 5 min)", min_value=0, value=0, step=10)
+
+        m_col1, m_col2 = st.columns(2)
+        with m_col1:
+            selected_match_model = st.selectbox(
+                "Model Detecție:",
+                ["yolov8n.pt", "yolov8s.pt", "yolov8m.pt", "yolo11n.pt", "yolo11s.pt", "yolov5su.pt", "rtdetr-l.pt"],
+                index=0
+            )
+        with m_col2:
+            selected_match_tracker = st.selectbox(
+                "Algoritm Tracking:",
+                ["bytetrack.yaml", "botsort.yaml"],
+                index=0
+            )
 
     can_start = (uploaded_file is not None) or (len(youtube_url.strip()) > 0)
 
@@ -126,7 +140,9 @@ with tab_match:
                 "team_a": team_a_input,
                 "team_b": team_b_input,
                 "start_sec": str(start_sec),
-                "duration_sec": str(duration_sec)
+                "duration_sec": str(duration_sec),
+                "model_name": selected_match_model,
+                "tracker_name": selected_match_tracker
             }
             if uploaded_file is not None:
                 files = {"file": (uploaded_file.name, uploaded_file.getvalue(), "video/mp4")}
@@ -167,12 +183,14 @@ with tab_match:
 
         st.divider()
         ball_frames = stats["video_info"].get("ball_detected_frames", 0)
+        model_tag = data.get("model_used", "yolov8n.pt")
+        tracker_tag = data.get("tracker_used", "bytetrack.yaml")
         st.markdown(
             f"### 📋 Meci analizat: **{data.get('video_title', 'Match Clip')}** "
-            f"(ID: `{sid}` | Cadre minge detectată: `{ball_frames}`)"
+            f"(ID: `{sid}` | Model: `{model_tag}` | Tracker: `{tracker_tag}` | Cadre minge: `{ball_frames}`)"
         )
 
-        st.subheader("🎥 Tracking Live + Radar Tactic 2D Sincronizat")
+        st.subheader("🎥 Tracking Live + Radar Tactic 2D Orizontal Sincronizat")
         render_backend_video(visuals["video_url"])
 
         st.divider()
@@ -333,24 +351,32 @@ with tab_match:
 # TAB 2: BENCHMARK & EVALUARE LICENTA
 # ==========================================
 with tab_bench:
-    st.subheader("🔬 Evaluare Cantitativă & Studiu de Ablație (Hardware & Modele)")
-    st.write("Rulează experimente comparative pe același clip video pentru a genera tabelele CSV și graficele din capitolul de evaluare al licenței.")
+    st.subheader("🔬 Evaluare Cantitativă & Studiu de Ablație (Modele, Trackere & Hardware)")
+    st.write("Compară arhitecturi diferite (YOLOv8, YOLOv11, YOLOv5u, RT-DETR Transformer) și algoritmi de tracking (ByteTrack vs. BoT-SORT).")
 
-    b_col1, b_col2, b_col3 = st.columns(3)
+    b_col1, b_col2 = st.columns(2)
     with b_col1:
         selected_models = st.multiselect(
-            "Modele YOLOv8 de comparat:",
-            ["yolov8n.pt", "yolov8s.pt", "yolov8m.pt"],
-            default=["yolov8n.pt", "yolov8s.pt"]
+            "Modele de Detecție de comparat:",
+            ["yolov8n.pt", "yolov8s.pt", "yolov8m.pt", "yolo11n.pt", "yolo11s.pt", "yolov5su.pt", "rtdetr-l.pt"],
+            default=["yolov8n.pt", "yolov8s.pt", "yolo11n.pt", "rtdetr-l.pt"]
         )
     with b_col2:
+        selected_trackers = st.multiselect(
+            "Algoritmi Tracking (ByteTrack vs. BoT-SORT):",
+            ["bytetrack.yaml", "botsort.yaml"],
+            default=["bytetrack.yaml", "botsort.yaml"]
+        )
+
+    b_col3, b_col4 = st.columns(2)
+    with b_col3:
         selected_devices = st.multiselect(
             "Dispozitive Hardware:",
             ["mps", "cpu"],
-            default=["mps", "cpu"]
+            default=["mps"]
         )
-    with b_col3:
-        eval_frames = st.slider("Număr cadre evaluate per configurație:", min_value=60, max_value=300, value=120, step=30)
+    with b_col4:
+        eval_frames = st.slider("Număr cadre evaluate per configurație:", min_value=60, max_value=240, value=90, step=30)
 
     bench_file = st.file_uploader("Încarcă un clip de referință (sau lasă gol pentru a folosi ultimul meci analizat)", type=["mp4", "avi", "mov"], key="bench_uploader")
     last_sid = st.session_state.get("last_session_id", "")
@@ -358,11 +384,12 @@ with tab_bench:
     if st.button("🚀 Rulează Benchmark Comparativ", type="primary"):
         if not bench_file and not last_sid:
             st.warning("Încarcă un clip video aici sau analizează mai întâi un clip în primul tab.")
-        elif not selected_models or not selected_devices:
-            st.warning("Selectează cel puțin un model și un dispozitiv.")
+        elif not selected_models or not selected_trackers or not selected_devices:
+            st.warning("Selectează cel puțin un model, un tracker și un dispozitiv.")
         else:
             data_payload = {
                 "models": ",".join(selected_models),
+                "trackers": ",".join(selected_trackers),
                 "devices": ",".join(selected_devices),
                 "max_frames": str(eval_frames),
                 "session_id": last_sid
@@ -407,5 +434,56 @@ with tab_bench:
         )
 
         st.subheader("📈 Grafice Comparative (salvate automat în folderul benchmarks/)")
-        render_backend_image(b_out["urls"]["perf_chart"], caption="Comparație FPS și Latență (MPS vs CPU / Modele)")
+        render_backend_image(b_out["urls"]["perf_chart"], caption="Comparație FPS și Latență (Modele, Trackere & Hardware)")
         render_backend_image(b_out["urls"]["acc_chart"], caption="Comparație Detecție și Stabilitate Tracking")
+
+    # ==========================================
+    # EVALUARE GROUND TRUTH MANUAL VS SISTEM
+    # ==========================================
+    st.divider()
+    st.subheader("🎯 Validare Acuratețe Evenimente (Ground Truth Manual vs. Sistem)")
+    st.write("Compară fazele detectate automat pe meciul activ cu adnotările tale manuale (Playbook Secțiunea 7).")
+
+    if "results" not in st.session_state:
+        st.info("Deschide sau analizează mai întâi un meci în Tab 1 (sau din Istoric) pentru a-l evalua.")
+    else:
+        res_data = st.session_state["results"]
+        active_sid = res_data["session_id"]
+        t0_n = res_data["stats"]["teams"]["0"]["name"]
+        t1_n = res_data["stats"]["teams"]["1"]["name"]
+
+        tol_sec = st.slider("Fereastră de toleranță timestamp (± secunde):", min_value=1.0, max_value=10.0, value=3.0, step=0.5)
+
+        default_gt = pd.DataFrame([
+            {"timestamp_sec": 4.0, "attacking_team": t0_n, "flank": "Dreapta"},
+            {"timestamp_sec": 10.0, "attacking_team": t1_n, "flank": "Centru"},
+            {"timestamp_sec": 16.0, "attacking_team": t0_n, "flank": "Stânga"},
+        ])
+        st.caption("Editează tabelul de mai jos cu momentele reale observate de tine în videoclip (poți adăuga/șterge rânduri):")
+        edited_gt = st.data_editor(default_gt, num_rows="dynamic", use_container_width=True)
+
+        if st.button("📐 Calculează Metricile de Acuratețe (Precision / Recall / F1)"):
+            gt_records = edited_gt.dropna(subset=["timestamp_sec"]).to_dict(orient="records")
+            r_gt = requests.post(
+                f"{API_URL}/api/evaluate_ground_truth/{active_sid}",
+                data={"ground_truth_json": pd.Series(gt_records).to_json(orient="values"), "tolerance_sec": str(tol_sec)}
+            )
+            if r_gt.status_code == 200:
+                m = r_gt.json()
+                g1, g2, g3, g4 = st.columns(4)
+                g1.metric("Precision", f"{m['precision_pct']}%")
+                g2.metric("Recall", f"{m['recall_pct']}%")
+                g3.metric("F1-Score", f"{m['f1_score_pct']}%")
+                g4.metric("Eroare Medie Timp", f"{m['mean_timestamp_error_sec']} s")
+
+                g5, g6 = st.columns(2)
+                g5.metric("Acuratețe Atribuire Echipă", f"{m['team_attribution_acc_pct']}%")
+                g6.metric("Acuratețe Clasificare Flanc", f"{m['flank_classification_acc_pct']}%")
+
+                gt_df = pd.DataFrame([m])
+                st.download_button(
+                    "⬇️ Descarcă Raport Ground Truth (CSV)",
+                    data=gt_df.to_csv(index=False).encode("utf-8"),
+                    file_name="ground_truth_evaluation.csv",
+                    mime="text/csv"
+                )

@@ -8,7 +8,7 @@ import supervision as sv
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from ultralytics import YOLO
+from ultralytics import YOLO, RTDETR
 from sklearn.metrics import silhouette_score
 from backend.team_classifier import TeamClassifier
 
@@ -17,41 +17,52 @@ BENCHMARK_DIR = "benchmarks"
 os.makedirs(BENCHMARK_DIR, exist_ok=True)
 
 
-def run_single_configuration(video_path: str, model_name: str, device: str, max_frames: int = 150) -> dict:
-    model = YOLO(model_name)
+def _load_model(model_name: str):
+    if "rtdetr" in model_name.lower():
+        return RTDETR(model_name)
+    return YOLO(model_name)
+
+
+def run_single_configuration(
+    video_path: str,
+    model_name: str,
+    tracker_name: str,
+    device: str,
+    max_frames: int = 120
+) -> dict:
+    model = _load_model(model_name)
     classifier = TeamClassifier(outlier_threshold=68.0)
 
     cap = cv2.VideoCapture(video_path)
     latencies_ms = []
     detections_per_frame = []
+    ball_detections = 0
     confidences = []
     unique_track_ids = set()
     track_team_history = {}
 
-    # Warm-up scurt (3 cadre) pentru a elimina overhead-ul initial de alocare MPS/CPU
+    # Warm-up (3 cadre)
     for _ in range(3):
         ret, warm_frame = cap.read()
         if not ret:
             break
-        _ = model(warm_frame, device=device, verbose=False)
+        _ = model(warm_frame, classes=[0, 32], device=device, verbose=False)
 
     cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
 
-    # Calibrare rapida TeamClassifier pe primele 30 cadre
+    # Calibrare TeamClassifier pe primele 30 cadre
     cal_idx = 0
     while cap.isOpened() and cal_idx < 30:
         ret, frame = cap.read()
         if not ret:
             break
-        res = model(frame, device=device, verbose=False)[0]
+        res = model(frame, classes=[0], device=device, verbose=False)[0]
         dets = sv.Detections.from_ultralytics(res)
-        dets = dets[dets.class_id == 0]
         for xyxy in dets.xyxy:
             classifier.collect_sample(frame, xyxy)
         cal_idx += 1
     classifier.fit()
 
-    # Calculam Silhouette Score pe esantioanele de tricouri colectate
     sil_score = 0.0
     if classifier.is_calibrated and len(classifier.calibration_samples) >= 10:
         samples_arr = np.array(classifier.calibration_samples)
@@ -59,7 +70,6 @@ def run_single_configuration(video_path: str, model_name: str, device: str, max_
         if len(set(labels_arr)) == 2:
             sil_score = float(silhouette_score(samples_arr, labels_arr))
 
-    # Rulare benchmark cronometrat pe max_frames
     cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
     frame_count = 0
 
@@ -69,7 +79,15 @@ def run_single_configuration(video_path: str, model_name: str, device: str, max_
             break
 
         t0 = time.perf_counter()
-        results = model.track(frame, persist=True, tracker="bytetrack.yaml", device=device, verbose=False)[0]
+        results = model.track(
+            frame,
+            persist=True,
+            tracker=tracker_name,
+            classes=[0, 32],
+            conf=0.18,
+            device=device,
+            verbose=False
+        )[0]
         if device == "mps":
             torch.mps.synchronize()
         elif device == "cuda":
@@ -78,9 +96,13 @@ def run_single_configuration(video_path: str, model_name: str, device: str, max_
 
         latencies_ms.append((t1 - t0) * 1000.0)
 
-        dets = sv.Detections.from_ultralytics(results)
-        dets = dets[dets.class_id == 0]
+        all_dets = sv.Detections.from_ultralytics(results)
+        dets = all_dets[all_dets.class_id == 0]
+        b_dets = all_dets[all_dets.class_id == 32]
+
         detections_per_frame.append(len(dets))
+        if len(b_dets) > 0:
+            ball_detections += 1
 
         if dets.confidence is not None and len(dets.confidence) > 0:
             confidences.extend([float(c) for c in dets.confidence])
@@ -97,7 +119,6 @@ def run_single_configuration(video_path: str, model_name: str, device: str, max_
 
     cap.release()
 
-    # Consistenta atribuirii echipei pe acelasi track_id
     consistencies = []
     for tid, votes in track_team_history.items():
         if len(votes) >= 3:
@@ -106,14 +127,17 @@ def run_single_configuration(video_path: str, model_name: str, device: str, max_
 
     avg_latency = float(np.mean(latencies_ms)) if latencies_ms else 0.0
     fps = 1000.0 / avg_latency if avg_latency > 0 else 0.0
+    short_tracker = tracker_name.replace(".yaml", "")
 
     return {
         "model": model_name,
+        "tracker": short_tracker,
         "device": device.upper(),
         "frames_evaluated": frame_count,
         "avg_latency_ms": round(avg_latency, 2),
         "fps": round(fps, 2),
         "avg_players_per_frame": round(float(np.mean(detections_per_frame)) if detections_per_frame else 0.0, 2),
+        "ball_recall_frames_pct": round((ball_detections / max(1, frame_count)) * 100.0, 1),
         "avg_confidence": round(float(np.mean(confidences)) if confidences else 0.0, 3),
         "unique_track_ids": len(unique_track_ids),
         "team_silhouette_score": round(sil_score, 3),
@@ -133,45 +157,49 @@ def generate_benchmark_artifacts(results: list[dict], output_dir: str = BENCHMAR
             writer.writeheader()
             writer.writerows(results)
 
-    labels = [f"{r['model']}\n({r['device']})" for r in results]
+    labels = [f"{r['model'].replace('.pt','')}\n{r['tracker']} ({r['device']})" for r in results]
     fps_vals = [r["fps"] for r in results]
     lat_vals = [r["avg_latency_ms"] for r in results]
 
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(11, 4.2))
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4.5))
     ax1.bar(labels, fps_vals, color="#2b7bba")
     ax1.set_title("Viteză Inferență (FPS — mai mare = mai bun)")
     ax1.set_ylabel("Cadre pe secundă (FPS)")
+    ax1.tick_params(axis='x', rotation=15)
     for i, v in enumerate(fps_vals):
-        ax1.text(i, v + 0.5, f"{v}", ha="center", fontsize=9)
+        ax1.text(i, v + 0.4, f"{v}", ha="center", fontsize=8.5)
 
     ax2.bar(labels, lat_vals, color="#d95f02")
     ax2.set_title("Latență Medie per Cadru (ms — mai mic = mai bun)")
     ax2.set_ylabel("Milisecunde (ms)")
+    ax2.tick_params(axis='x', rotation=15)
     for i, v in enumerate(lat_vals):
-        ax2.text(i, v + 0.5, f"{v} ms", ha="center", fontsize=9)
+        ax2.text(i, v + 0.4, f"{v} ms", ha="center", fontsize=8.5)
 
     plt.tight_layout()
-    plt.savefig(perf_chart_path)
+    plt.savefig(perf_chart_path, dpi=150)
     plt.close()
 
     players_vals = [r["avg_players_per_frame"] for r in results]
     ids_vals = [r["unique_track_ids"] for r in results]
 
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(11, 4.2))
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4.5))
     ax1.bar(labels, players_vals, color="#1b9e77")
     ax1.set_title("Media Jucătorilor Detectați / Cadru")
     ax1.set_ylabel("Nr. jucători")
+    ax1.tick_params(axis='x', rotation=15)
     for i, v in enumerate(players_vals):
-        ax1.text(i, v + 0.1, f"{v}", ha="center", fontsize=9)
+        ax1.text(i, v + 0.1, f"{v}", ha="center", fontsize=8.5)
 
     ax2.bar(labels, ids_vals, color="#7570b3")
-    ax2.set_title("ID-uri Unice Generate (Fragmentare Tracking)")
+    ax2.set_title("ID-uri Unice Generate (Mai mic = Tracking mai stabil)")
     ax2.set_ylabel("Total ID-uri")
+    ax2.tick_params(axis='x', rotation=15)
     for i, v in enumerate(ids_vals):
-        ax2.text(i, v + 0.3, f"{v}", ha="center", fontsize=9)
+        ax2.text(i, v + 0.3, f"{v}", ha="center", fontsize=8.5)
 
     plt.tight_layout()
-    plt.savefig(acc_chart_path)
+    plt.savefig(acc_chart_path, dpi=150)
     plt.close()
 
     return {
@@ -184,22 +212,25 @@ def generate_benchmark_artifacts(results: list[dict], output_dir: str = BENCHMAR
 def run_full_benchmark(
     video_path: str,
     models: list[str] = None,
+    trackers: list[str] = None,
     devices: list[str] = None,
-    max_frames: int = 150,
+    max_frames: int = 120,
     progress_callback=None
 ) -> dict:
     if models is None:
         models = ["yolov8n.pt", "yolov8s.pt"]
+    if trackers is None:
+        trackers = ["bytetrack.yaml"]
     if devices is None:
         devices = ["mps"] if torch.backends.mps.is_available() else ["cpu"]
 
-    configs = [(m, d) for m in models for d in devices]
+    configs = [(m, t, d) for m in models for t in trackers for d in devices]
     all_results = []
 
-    for idx, (m, d) in enumerate(configs):
+    for idx, (m, t, d) in enumerate(configs):
         if progress_callback:
-            progress_callback(int((idx / len(configs)) * 90), f"Se evaluează {m} pe {d.upper()}...")
-        res = run_single_configuration(video_path, m, d, max_frames=max_frames)
+            progress_callback(int((idx / len(configs)) * 90), f"Evaluare {m} + {t.replace('.yaml','')} pe {d.upper()}...")
+        res = run_single_configuration(video_path, m, t, d, max_frames=max_frames)
         all_results.append(res)
 
     artifacts = generate_benchmark_artifacts(all_results)
@@ -212,13 +243,77 @@ def run_full_benchmark(
     }
 
 
-if __name__ == "__main__":
-    import sys
-    if len(sys.argv) < 2:
-        print("Utilizare: python -m backend.benchmark <cale_video.mp4>")
-        sys.exit(1)
-    devs = ["mps", "cpu"] if torch.backends.mps.is_available() else ["cpu"]
-    out = run_full_benchmark(sys.argv[1], models=["yolov8n.pt", "yolov8s.pt"], devices=devs, max_frames=120)
-    for row in out["results"]:
-        print(row)
-    print("Fișiere salvate în:", out["artifacts"])
+def evaluate_events_against_ground_truth(
+    detected_events: list[dict],
+    ground_truth_events: list[dict],
+    tolerance_sec: float = 3.0
+) -> dict:
+    """
+    Compară evenimentele detectate de sistem cu adnotările manuale (Ground Truth)
+    și calculează Precision, Recall, F1-Score, Timestamp Error și acuratețea pe echipă/flanc.
+    """
+    matched_gt = set()
+    matched_det = set()
+    timestamp_errors = []
+    team_matches = 0
+    flank_matches = 0
+
+    for g_idx, gt in enumerate(ground_truth_events):
+        gt_time = float(gt["timestamp_sec"])
+        best_d_idx = None
+        best_diff = float("inf")
+
+        for d_idx, det in enumerate(detected_events):
+            if d_idx in matched_det:
+                continue
+            diff = abs(float(det["timestamp_sec"]) - gt_time)
+            if diff <= tolerance_sec and diff < best_diff:
+                best_diff = diff
+                best_d_idx = d_idx
+
+        if best_d_idx is not None:
+            matched_gt.add(g_idx)
+            matched_det.add(best_d_idx)
+            timestamp_errors.append(best_diff)
+
+            det_ev = detected_events[best_d_idx]
+            if gt.get("attacking_team") and det_ev.get("attacking_team"):
+                if gt["attacking_team"].strip().lower() == det_ev["attacking_team"].strip().lower():
+                    team_matches += 1
+            if gt.get("flank") and det_ev.get("flank"):
+                if gt["flank"].strip().lower() == det_ev["flank"].strip().lower():
+                    flank_matches += 1
+
+    tp = len(matched_gt)
+    fp = max(0, len(detected_events) - tp)
+    fn = max(0, len(ground_truth_events) - tp)
+
+    precision = (tp / (tp + fp)) * 100.0 if (tp + fp) > 0 else 0.0
+    recall = (tp / (tp + fn)) * 100.0 if (tp + fn) > 0 else 0.0
+    f1 = (2 * precision * recall / (precision + recall)) if (precision + recall) > 0 else 0.0
+    mean_err = float(np.mean(timestamp_errors)) if timestamp_errors else 0.0
+    team_acc = (team_matches / tp) * 100.0 if tp > 0 else 0.0
+    flank_acc = (flank_matches / tp) * 100.0 if tp > 0 else 0.0
+
+    summary = {
+        "ground_truth_count": len(ground_truth_events),
+        "detected_count": len(detected_events),
+        "true_positives": tp,
+        "false_positives": fp,
+        "false_negatives": fn,
+        "tolerance_sec": tolerance_sec,
+        "precision_pct": round(precision, 1),
+        "recall_pct": round(recall, 1),
+        "f1_score_pct": round(f1, 1),
+        "mean_timestamp_error_sec": round(mean_err, 2),
+        "team_attribution_acc_pct": round(team_acc, 1),
+        "flank_classification_acc_pct": round(flank_acc, 1)
+    }
+
+    csv_path = os.path.join(BENCHMARK_DIR, "ground_truth_evaluation.csv")
+    with open(csv_path, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=list(summary.keys()))
+        writer.writeheader()
+        writer.writerow(summary)
+
+    return summary

@@ -11,7 +11,7 @@ from backend.pipeline import VideoAnalysisPipeline
 from backend.analytics import generate_visual_analytics, extract_10s_clip
 from backend.llm_service import generate_tactical_report
 from backend.youtube_service import download_youtube_video
-from backend.benchmark import run_full_benchmark, BENCHMARK_DIR
+from backend.benchmark import run_full_benchmark, evaluate_events_against_ground_truth, BENCHMARK_DIR
 
 load_dotenv()
 
@@ -37,7 +37,9 @@ def run_analysis_job(
     youtube_url: Optional[str],
     video_title: str,
     start_sec: float,
-    duration_sec: Optional[float]
+    duration_sec: Optional[float],
+    model_name: str,
+    tracker_name: str
 ):
     try:
         if youtube_url:
@@ -55,6 +57,8 @@ def run_analysis_job(
             team_names=(team_a, team_b),
             start_sec=start_sec,
             duration_sec=duration_sec,
+            model_name=model_name,
+            tracker_name=tracker_name,
             progress_callback=update_progress
         )
         jobs_status[session_id]["progress"] = 90
@@ -67,6 +71,8 @@ def run_analysis_job(
         result_payload = {
             "session_id": session_id,
             "video_title": video_title,
+            "model_used": model_name,
+            "tracker_used": tracker_name,
             "stats": {k: v for k, v in stats.items() if k != "frames"},
             "visuals": {
                 "video_url": f"/files/{session_id}/annotated_video.mp4",
@@ -95,14 +101,28 @@ def run_analysis_job(
         jobs_status[session_id] = {"status": "failed", "error": str(e)}
 
 
-def execute_benchmark_task(bench_id: str, video_path: str, models: list[str], devices: list[str], max_frames: int):
+def execute_benchmark_task(
+    bench_id: str,
+    video_path: str,
+    models: list[str],
+    trackers: list[str],
+    devices: list[str],
+    max_frames: int
+):
     try:
         benchmark_jobs[bench_id] = {"status": "running", "progress": 5, "message": "Inițializare benchmark..."}
 
         def on_prog(pct: int, msg: str):
             benchmark_jobs[bench_id] = {"status": "running", "progress": pct, "message": msg}
 
-        output = run_full_benchmark(video_path, models=models, devices=devices, max_frames=max_frames, progress_callback=on_prog)
+        output = run_full_benchmark(
+            video_path,
+            models=models,
+            trackers=trackers,
+            devices=devices,
+            max_frames=max_frames,
+            progress_callback=on_prog
+        )
         benchmark_jobs[bench_id] = {
             "status": "completed",
             "progress": 100,
@@ -126,7 +146,9 @@ async def start_analysis(
     team_a: str = Form("Team A"),
     team_b: str = Form("Team B"),
     start_sec: float = Form(0.0),
-    duration_sec: float = Form(0.0)
+    duration_sec: float = Form(0.0),
+    model_name: str = Form("yolov8n.pt"),
+    tracker_name: str = Form("bytetrack.yaml")
 ):
     if not file and not (youtube_url and youtube_url.strip()):
         raise HTTPException(status_code=400, detail="Încarcă un fișier video sau introdu un link YouTube.")
@@ -159,7 +181,9 @@ async def start_analysis(
         clean_url,
         video_title,
         max(0.0, start_sec),
-        dur
+        dur,
+        model_name.strip() or "yolov8n.pt",
+        tracker_name.strip() or "bytetrack.yaml"
     )
 
     return {"session_id": session_id, "message": "Analysis started"}
@@ -243,9 +267,10 @@ async def start_benchmark(
     background_tasks: BackgroundTasks,
     file: Optional[UploadFile] = File(None),
     session_id: Optional[str] = Form(None),
-    models: str = Form("yolov8n.pt,yolov8s.pt"),
-    devices: str = Form("mps,cpu"),
-    max_frames: int = Form(150)
+    models: str = Form("yolov8n.pt,yolov8s.pt,yolo11n.pt,rtdetr-l.pt"),
+    trackers: str = Form("bytetrack.yaml,botsort.yaml"),
+    devices: str = Form("mps"),
+    max_frames: int = Form(90)
 ):
     bench_id = str(uuid.uuid4())[:8]
     video_path = None
@@ -265,10 +290,19 @@ async def start_benchmark(
         raise HTTPException(status_code=400, detail="Încarcă un videoclip sau rulează mai întâi o analiză de meci.")
 
     model_list = [m.strip() for m in models.split(",") if m.strip()]
+    tracker_list = [t.strip() for t in trackers.split(",") if t.strip()]
     device_list = [d.strip().lower() for d in devices.split(",") if d.strip()]
 
     benchmark_jobs[bench_id] = {"status": "queued", "progress": 0, "message": "În așteptare..."}
-    background_tasks.add_task(execute_benchmark_task, bench_id, video_path, model_list, device_list, max_frames)
+    background_tasks.add_task(
+        execute_benchmark_task,
+        bench_id,
+        video_path,
+        model_list,
+        tracker_list,
+        device_list,
+        max_frames
+    )
     return {"bench_id": bench_id}
 
 
@@ -277,3 +311,27 @@ def get_benchmark_status(bench_id: str):
     if bench_id not in benchmark_jobs:
         raise HTTPException(status_code=404, detail="Benchmark job not found")
     return benchmark_jobs[bench_id]
+
+
+@app.post("/api/evaluate_ground_truth/{session_id}")
+def evaluate_ground_truth_endpoint(
+    session_id: str,
+    ground_truth_json: str = Form(...),
+    tolerance_sec: float = Form(3.0)
+):
+    result_file = os.path.join(STORAGE_DIR, session_id, "final_result.json")
+    if not os.path.exists(result_file):
+        raise HTTPException(status_code=404, detail="Sesiunea nu a fost găsită.")
+
+    with open(result_file, "r") as f:
+        res_data = json.load(f)
+
+    detected_events = res_data["stats"].get("timeline_events", [])
+    gt_events = json.loads(ground_truth_json)
+
+    metrics = evaluate_events_against_ground_truth(
+        detected_events=detected_events,
+        ground_truth_events=gt_events,
+        tolerance_sec=tolerance_sec
+    )
+    return metrics

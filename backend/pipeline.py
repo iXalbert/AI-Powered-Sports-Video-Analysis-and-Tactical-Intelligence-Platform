@@ -7,7 +7,7 @@ import supervision as sv
 from ultralytics import YOLO
 from backend.team_classifier import TeamClassifier
 from backend.pitch_radar import draw_2d_pitch_canvas, render_live_radar_frame
-
+from ultralytics import RTDETR
 
 class VideoAnalysisPipeline:
     def __init__(self, model_name: str = "yolov8n.pt"):
@@ -18,7 +18,13 @@ class VideoAnalysisPipeline:
         else:
             self.device = "cpu"
 
-        self.model = YOLO(model_name)
+        self.current_model_name = model_name
+        self.model = self._load_detector(model_name)
+
+    def _load_detector(self, model_name: str):
+        if "rtdetr" in model_name.lower():
+            return RTDETR(model_name)
+        return YOLO(model_name)
 
     def _calibrate_teams(self, input_path: str, start_frame: int, end_frame: int, max_sample_frames: int = 45) -> TeamClassifier:
         classifier = TeamClassifier(outlier_threshold=68.0)
@@ -54,10 +60,13 @@ class VideoAnalysisPipeline:
         team_names: tuple[str, str] = ("Team A", "Team B"),
         start_sec: float = 0.0,
         duration_sec: float | None = None,
+        model_name : str = "yolov8n.pt",
+        tracker_name : str = "bytetrack.yaml",
         progress_callback=None
     ) -> dict:
-        if progress_callback:
-            progress_callback(10)
+        if model_name != self.current_model_name:
+            self.model = self._load_detector(model_name)
+            self.current_model_name = model_name
 
         video_info = sv.VideoInfo.from_video_path(input_path)
         fps = video_info.fps or 25.0
@@ -113,7 +122,7 @@ class VideoAnalysisPipeline:
             results = self.model.track(
                 frame,
                 persist=True,
-                tracker="bytetrack.yaml",
+                tracker=tracker_name,
                 classes=[0, 32],
                 conf=0.18,
                 device=self.device,
