@@ -31,7 +31,7 @@ def run_single_configuration(
     max_frames: int = 120
 ) -> dict:
     model = _load_model(model_name)
-    classifier = TeamClassifier(outlier_threshold=68.0)
+    classifier = TeamClassifier(outlier_threshold=72.0)
 
     cap = cv2.VideoCapture(video_path)
     latencies_ms = []
@@ -157,24 +157,33 @@ def generate_benchmark_artifacts(results: list[dict], output_dir: str = BENCHMAR
             writer.writeheader()
             writer.writerows(results)
 
-    labels = [f"{r['model'].replace('.pt','')}\n{r['tracker']} ({r['device']})" for r in results]
+    labels = [f"{r['model'].replace('.pt','')} | {r['tracker']} ({r['device']})" for r in results]
+    y_pos = np.arange(len(labels))
+    fig_h = max(4.2, len(labels) * 0.65 + 1.5)
+
     fps_vals = [r["fps"] for r in results]
     lat_vals = [r["avg_latency_ms"] for r in results]
 
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4.5))
-    ax1.bar(labels, fps_vals, color="#2b7bba")
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13, fig_h))
+    ax1.barh(y_pos, fps_vals, color="#2b7bba", height=0.55)
+    ax1.set_yticks(y_pos)
+    ax1.set_yticklabels(labels, fontsize=9)
+    ax1.invert_yaxis()
     ax1.set_title("Viteză Inferență (FPS — mai mare = mai bun)")
-    ax1.set_ylabel("Cadre pe secundă (FPS)")
-    ax1.tick_params(axis='x', rotation=15)
+    ax1.set_xlabel("Cadre pe secundă (FPS)")
+    ax1.set_xlim(0, max(fps_vals or [10]) * 1.18)
     for i, v in enumerate(fps_vals):
-        ax1.text(i, v + 0.4, f"{v}", ha="center", fontsize=8.5)
+        ax1.text(v + max(fps_vals) * 0.02, i, f"{v} FPS", va="center", fontsize=8.5)
 
-    ax2.bar(labels, lat_vals, color="#d95f02")
+    ax2.barh(y_pos, lat_vals, color="#d95f02", height=0.55)
+    ax2.set_yticks(y_pos)
+    ax2.set_yticklabels(labels, fontsize=9)
+    ax2.invert_yaxis()
     ax2.set_title("Latență Medie per Cadru (ms — mai mic = mai bun)")
-    ax2.set_ylabel("Milisecunde (ms)")
-    ax2.tick_params(axis='x', rotation=15)
+    ax2.set_xlabel("Milisecunde (ms)")
+    ax2.set_xlim(0, max(lat_vals or [10]) * 1.22)
     for i, v in enumerate(lat_vals):
-        ax2.text(i, v + 0.4, f"{v} ms", ha="center", fontsize=8.5)
+        ax2.text(v + max(lat_vals) * 0.02, i, f"{v} ms", va="center", fontsize=8.5)
 
     plt.tight_layout()
     plt.savefig(perf_chart_path, dpi=150)
@@ -183,20 +192,26 @@ def generate_benchmark_artifacts(results: list[dict], output_dir: str = BENCHMAR
     players_vals = [r["avg_players_per_frame"] for r in results]
     ids_vals = [r["unique_track_ids"] for r in results]
 
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4.5))
-    ax1.bar(labels, players_vals, color="#1b9e77")
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13, fig_h))
+    ax1.barh(y_pos, players_vals, color="#1b9e77", height=0.55)
+    ax1.set_yticks(y_pos)
+    ax1.set_yticklabels(labels, fontsize=9)
+    ax1.invert_yaxis()
     ax1.set_title("Media Jucătorilor Detectați / Cadru")
-    ax1.set_ylabel("Nr. jucători")
-    ax1.tick_params(axis='x', rotation=15)
+    ax1.set_xlabel("Nr. jucători")
+    ax1.set_xlim(0, max(players_vals or [5]) * 1.18)
     for i, v in enumerate(players_vals):
-        ax1.text(i, v + 0.1, f"{v}", ha="center", fontsize=8.5)
+        ax1.text(v + max(players_vals) * 0.02, i, f"{v}", va="center", fontsize=8.5)
 
-    ax2.bar(labels, ids_vals, color="#7570b3")
+    ax2.barh(y_pos, ids_vals, color="#7570b3", height=0.55)
+    ax2.set_yticks(y_pos)
+    ax2.set_yticklabels(labels, fontsize=9)
+    ax2.invert_yaxis()
     ax2.set_title("ID-uri Unice Generate (Mai mic = Tracking mai stabil)")
-    ax2.set_ylabel("Total ID-uri")
-    ax2.tick_params(axis='x', rotation=15)
+    ax2.set_xlabel("Total ID-uri")
+    ax2.set_xlim(0, max(ids_vals or [5]) * 1.18)
     for i, v in enumerate(ids_vals):
-        ax2.text(i, v + 0.3, f"{v}", ha="center", fontsize=8.5)
+        ax2.text(v + max(ids_vals) * 0.02, i, f"{v}", va="center", fontsize=8.5)
 
     plt.tight_layout()
     plt.savefig(acc_chart_path, dpi=150)
@@ -248,10 +263,6 @@ def evaluate_events_against_ground_truth(
     ground_truth_events: list[dict],
     tolerance_sec: float = 3.0
 ) -> dict:
-    """
-    Compară evenimentele detectate de sistem cu adnotările manuale (Ground Truth)
-    și calculează Precision, Recall, F1-Score, Timestamp Error și acuratețea pe echipă/flanc.
-    """
     matched_gt = set()
     matched_det = set()
     timestamp_errors = []

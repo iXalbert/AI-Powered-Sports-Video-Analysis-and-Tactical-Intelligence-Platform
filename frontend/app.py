@@ -1,3 +1,4 @@
+import json
 import time
 import requests
 import pandas as pd
@@ -5,14 +6,26 @@ import streamlit as st
 
 API_URL = "http://127.0.0.1:8000"
 
+SPORTS_LIST = [
+    "Fotbal (Football)",
+    "Baschet (Basketball)",
+    "Handbal (Handball)",
+    "Volei (Volleyball)",
+    "Tenis (Tennis)",
+    "Rugby (Rugby)",
+    "Hochei pe gheață (Ice Hockey)",
+    "Tenis de masă / Badminton"
+]
+
+COLOR_OPTIONS = ["Auto-detect", "Alb", "Negru", "Roșu", "Albastru", "Galben", "Verde", "Portocaliu", "Mov"]
+
 st.set_page_config(
     page_title="Tactical AI",
-    page_icon="⚽",
+    page_icon="🏆",
     layout="wide",
     initial_sidebar_state="collapsed"
 )
 
-# Optimizare iOS Web App (Add to Home Screen) + Responsive Mobile Layout
 st.markdown(
     """
     <meta name="apple-mobile-web-app-capable" content="yes">
@@ -63,9 +76,8 @@ def render_backend_image(relative_url: str, caption: str = None):
         st.error(f"Nu s-a putut încărca imaginea: {e}")
 
 
-st.title("⚽ AI Sports Video Analysis & Tactical Intelligence")
+st.title("🏆 AI Sports Video Analysis & Tactical Intelligence")
 
-# Sidebar pentru Istoric Sesiuni Salvate
 with st.sidebar:
     st.header("🗂️ Istoric Meciuri Analizate")
     try:
@@ -80,22 +92,27 @@ with st.sidebar:
             sid = session_map[chosen_label]
             st.session_state["results"] = requests.get(f"{API_URL}/api/results/{sid}").json()
             st.session_state["last_session_id"] = sid
-            st.session_state["swapped"] = False
             st.session_state.pop("active_phase_clip", None)
     else:
         st.caption("Nicio analiză salvată încă.")
 
-tab_match, tab_bench = st.tabs(["🎥 Analiză Tactică Meci", "📊 Benchmark & Evaluare Licență"])
+tab_match, tab_bench = st.tabs(["🎥 Analiză Tactică Multi-Sport", "📊 Benchmark & Evaluare Licență"])
 
 # ==========================================
-# TAB 1: ANALIZA TACTICA MECI
+# TAB 1: ANALIZA TACTICA MULTI-SPORT
 # ==========================================
 with tab_match:
-    col_in1, col_in2 = st.columns(2)
+    selected_sport = st.selectbox("🏅 Selectează sportul din videoclip:", SPORTS_LIST, index=0)
+
+    col_in1, col_col1, col_in2, col_col2 = st.columns([2, 1, 2, 1])
     with col_in1:
-        team_a_input = st.text_input("Nume Echipa 1 (opțional)", value="Team A")
+        team_a_input = st.text_input("Nume Echipa 1 (sau 'Auto' din tabela scor)", value="Auto (Tabela Scor)")
+    with col_col1:
+        color_a_input = st.selectbox("Culoare 1:", COLOR_OPTIONS, index=0)
     with col_in2:
-        team_b_input = st.text_input("Nume Echipa 2 (opțional)", value="Team B")
+        team_b_input = st.text_input("Nume Echipa 2 (sau 'Auto' din tabela scor)", value="Auto (Tabela Scor)")
+    with col_col2:
+        color_b_input = st.selectbox("Culoare 2:", COLOR_OPTIONS, index=0)
 
     source_type = st.radio(
         "Alege sursa videoclipului:",
@@ -111,12 +128,12 @@ with tab_match:
     else:
         youtube_url = st.text_input("Lipește link-ul YouTube al meciului/rezumatului:", placeholder="https://www.youtube.com/watch?v=...")
 
-    with st.expander("⏱️ Opțiuni interval analizat & Model AI (opțional)", expanded=False):
+    with st.expander("⚙️ Opțiuni avansate: Interval timp, Model AI & Calibrare Homografică 2D", expanded=False):
         t_col1, t_col2 = st.columns(2)
         with t_col1:
             start_sec = st.number_input("Secunda de start", min_value=0, value=0, step=5)
         with t_col2:
-            duration_sec = st.number_input("Durată analizată (secunde, 0 = tot clipul / max 5 min)", min_value=0, value=0, step=10)
+            duration_sec = st.number_input("Durată analizată (secunde, 0 = tot clipul / max 15 min)", min_value=0, value=0, step=10)
 
         m_col1, m_col2 = st.columns(2)
         with m_col1:
@@ -132,13 +149,39 @@ with tab_match:
                 index=0
             )
 
+        st.markdown("**📐 Calibrare Perspectivă Teren 2D (Homografie — % din ecran):**")
+        st.caption("Ajustează dacă camera filmează dintr-un unghi foarte înclinat sau de aproape:")
+        h_c1, h_c2, h_c3, h_c4 = st.columns(4)
+        with h_c1:
+            tl_x = st.number_input("Stânga-Sus X%", 0, 50, 18)
+            tl_y = st.number_input("Stânga-Sus Y%", 0, 60, 22)
+        with h_c2:
+            tr_x = st.number_input("Dreapta-Sus X%", 50, 100, 82)
+            tr_y = st.number_input("Dreapta-Sus Y%", 0, 60, 22)
+        with h_c3:
+            bl_x = st.number_input("Stânga-Jos X%", 0, 40, 2)
+            bl_y = st.number_input("Stânga-Jos Y%", 50, 100, 94)
+        with h_c4:
+            br_x = st.number_input("Dreapta-Jos X%", 60, 100, 98)
+            br_y = st.number_input("Dreapta-Jos Y%", 50, 100, 94)
+
     can_start = (uploaded_file is not None) or (len(youtube_url.strip()) > 0)
 
     if can_start and st.button("Pornește Analiza Tactică", type="primary"):
         with st.spinner("Se inițializează sesiunea de analiză..."):
+            homography_cfg = {
+                "tl_x": tl_x, "tl_y": tl_y,
+                "tr_x": tr_x, "tr_y": tr_y,
+                "bl_x": bl_x, "bl_y": bl_y,
+                "br_x": br_x, "br_y": br_y
+            }
             payload = {
                 "team_a": team_a_input,
                 "team_b": team_b_input,
+                "color_a": color_a_input,
+                "color_b": color_b_input,
+                "sport": selected_sport,
+                "homography_json": json.dumps(homography_cfg),
                 "start_sec": str(start_sec),
                 "duration_sec": str(duration_sec),
                 "model_name": selected_match_model,
@@ -166,7 +209,6 @@ with tab_match:
 
             if state == "completed":
                 st.session_state["results"] = requests.get(f"{API_URL}/api/results/{session_id}").json()
-                st.session_state["swapped"] = False
                 st.session_state.pop("active_phase_clip", None)
                 break
             elif state == "failed":
@@ -180,17 +222,30 @@ with tab_match:
         visuals = data["visuals"]
         report = data["tactical_report"]
         sid = data["session_id"]
+        sp_label = data.get("sport", stats.get("sport", "Fotbal (Football)"))
 
         st.divider()
         ball_frames = stats["video_info"].get("ball_detected_frames", 0)
         model_tag = data.get("model_used", "yolov8n.pt")
         tracker_tag = data.get("tracker_used", "bytetrack.yaml")
         st.markdown(
-            f"### 📋 Meci analizat: **{data.get('video_title', 'Match Clip')}** "
-            f"(ID: `{sid}` | Model: `{model_tag}` | Tracker: `{tracker_tag}` | Cadre minge: `{ball_frames}`)"
+            f"### 📋 [{sp_label}] **{data.get('video_title', 'Match Clip')}** "
+            f"(ID: `{sid}` | Model: `{model_tag}` | Tracker: `{tracker_tag}` | Minge: `{ball_frames}` cadre)"
         )
 
-        st.subheader("🎥 Tracking Live + Radar Tactic 2D Orizontal Sincronizat")
+        sb_det = stats.get("scoreboard_detected")
+        tact_f = stats["video_info"].get("tactical_frames", 0)
+        filt_f = stats["video_info"].get("filtered_closeup_frames", 0)
+        if sb_det:
+            st.success(
+                f"📺 **Tabelă de scor citită automat ({sb_det['source']}):** "
+                f"`{sb_det['team_0_abbr']}` vs `{sb_det['team_1_abbr']}` | "
+                f"Cadre tactice valide: `{tact_f}` (filtrate `{filt_f}` cadre close-up/reluări)"
+            )
+        else:
+            st.caption(f"Cadre tactice valide: `{tact_f}` | Cadre close-up/reluări filtrate din radar: `{filt_f}`")
+
+        st.subheader("🎥 Tracking Live + Radar Tactic 2D Homografic Orizontal")
         render_backend_video(visuals["video_url"])
 
         st.divider()
@@ -198,15 +253,15 @@ with tab_match:
         # ==========================================
         # EXPLORER FAZE 10s (5s INAINTE + 5s DUPA) & CAUTARE
         # ==========================================
-        st.subheader("🎬 Explorer Faze & Momente (Secvențe de 10s: 5s înainte + 5s după)")
-        st.caption("Caută o fază după echipă/flanc sau alege orice moment (ex. înainte de un gol sau fault) pentru a viziona secvența de 10 secunde.")
+        st.subheader("🎬 Explorer Evenimente & Faze (Secvențe de 10s: 5s înainte + 5s după)")
+        st.caption("Caută pase, șuturi/aruncări, ocazii pe flancuri sau sari direct la orice secundă din meci.")
 
         events = stats.get("timeline_events", [])
         f_col1, f_col2 = st.columns([2, 1])
         with f_col1:
             search_query = st.text_input(
-                "🔎 Caută în evenimente (ex. 'dreapta', 'stânga', 'centru' sau numele echipei):",
-                placeholder="ex: atac pe dreapta..."
+                "🔎 Caută în evenimente (ex. 'pasă', 'șut', 'dreapta', 'stânga' sau numele echipei):",
+                placeholder="ex: șut pe dreapta..."
             ).strip().lower()
         with f_col2:
             flank_filter = st.selectbox("Filtru rapid flanc:", ["Toate flancurile", "Stânga", "Centru", "Dreapta"])
@@ -218,26 +273,26 @@ with tab_match:
             if flank_filter != "Toate flancurile" and flk != flank_filter:
                 continue
             if search_query:
-                words = [w for w in search_query.split() if w not in ("pe", "de", "la", "din", "atac", "atacuri", "faza", "faze")]
+                words = [w for w in search_query.split() if w not in ("pe", "de", "la", "din")]
                 if words and not any(w in lbl for w in words):
                     continue
             filtered_events.append(ev)
 
         p_col1, p_col2 = st.columns(2)
         with p_col1:
-            st.markdown("**1️⃣ Alege o fază detectată automat:**")
+            st.markdown("**1️⃣ Alege un eveniment detectat automat:**")
             if filtered_events:
                 ev_map = {e["label"]: e["timestamp_sec"] for e in filtered_events}
-                chosen_ev = st.selectbox("Faze filtrate:", list(ev_map.keys()))
+                chosen_ev = st.selectbox("Evenimente filtrate:", list(ev_map.keys()))
                 if st.button("▶️ Vezi Faza Selectată (10s)"):
                     r = requests.post(f"{API_URL}/api/extract_phase/{sid}", data={"timestamp_sec": str(ev_map[chosen_ev])})
                     if r.status_code == 200:
                         st.session_state["active_phase_clip"] = r.json()
             else:
-                st.info("Nicio fază nu corespunde filtrului curent.")
+                st.info("Niciun eveniment nu corespunde filtrului curent.")
 
         with p_col2:
-            st.markdown("**2️⃣ Sau sari la orice secundă din meci (Gol / Fault / Ocazie):**")
+            st.markdown("**2️⃣ Sau sari la orice secundă din meci (Gol / Coș / Fault / Raliu):**")
             v_start = float(stats["video_info"].get("start_sec", 0.0))
             v_end = float(stats["video_info"].get("end_sec", 30.0))
             custom_sec = st.slider(
@@ -276,19 +331,18 @@ with tab_match:
         top_ctrl1, top_ctrl2 = st.columns([3, 1])
         with top_ctrl2:
             st.write("")
-            if st.button("🔄 Inversează Echipele"):
-                st.session_state["swapped"] = not st.session_state.get("swapped", False)
+            if st.button("🔄 Inversează Echipele (inclusiv în Video)"):
+                with st.spinner("Se inversează echipele și se re-randează videoclipul + radarul 2D..."):
+                    r_swap = requests.post(f"{API_URL}/api/swap_teams/{sid}")
+                    if r_swap.status_code == 200:
+                        st.session_state["results"] = r_swap.json()
+                        st.rerun()
 
-        if st.session_state.get("swapped", False):
-            t0 = stats["teams"]["1"]
-            t1 = stats["teams"]["0"]
-            h0_url = visuals["heatmap_team_1_url"]
-            h1_url = visuals["heatmap_team_0_url"]
-        else:
-            t0 = stats["teams"]["0"]
-            t1 = stats["teams"]["1"]
-            h0_url = visuals["heatmap_team_0_url"]
-            h1_url = visuals["heatmap_team_1_url"]
+        t0 = stats["teams"]["0"]
+        t1 = stats["teams"]["1"]
+        h0_url = visuals["heatmap_team_0_url"]
+        h1_url = visuals["heatmap_team_1_url"]
+        ev_lbls = stats.get("event_labels", {"pass": "Pase", "shot": "Șuturi"})
 
         with top_ctrl1:
             view_mode = st.selectbox(
@@ -306,22 +360,24 @@ with tab_match:
                 f"<span style='background-color:{team_data['jersey_hex']};padding:2px 12px;border-radius:4px;border:1px solid #888;'>&nbsp;</span>",
                 unsafe_allow_html=True
             )
-            m1, m2 = st.columns(2)
+            m1, m2, m3, m4 = st.columns(4)
             m1.metric("Timp pe Atac", f"{team_data['attacking_share_pct']}%")
-            m2.metric("Poziționare Medie Teren", f"{team_data['avg_line_height_pct']}%")
+            m2.metric("Avans Teren", f"{team_data['avg_line_height_pct']}%")
+            m3.metric(f"{ev_lbls.get('pass', 'Pase')} est.", f"{team_data.get('estimated_passes', 0)}")
+            m4.metric(f"{ev_lbls.get('shot', 'Șuturi')} est.", f"{team_data.get('estimated_shots', 0)}")
 
             dist = team_data["attacking_distribution_pct"]
-            st.write("**Distribuția Atacului (Stânga / Centru / Dreapta):**")
+            st.write("**Distribuția Reală pe Flancuri (Stânga / Centru / Dreapta terenului):**")
             d1, d2, d3 = st.columns(3)
-            d1.metric("Stânga", f"{dist['left']}%")
-            d2.metric("Centru", f"{dist['center']}%")
-            d3.metric("Dreapta", f"{dist['right']}%")
+            d1.metric("Flanc Stânga", f"{dist['left']}%")
+            d2.metric("Zonă Centrală", f"{dist['center']}%")
+            d3.metric("Flanc Dreapta", f"{dist['right']}%")
 
             render_backend_image(pitch_map_url, caption=f"Hartă Tactică 2D Teren — {team_data['name']}")
 
             st.write("**Top Jucători Activi:**")
             for p in team_data["top_active_players"]:
-                st.write(f"• Jucător **#{p['track_id']}** — Mișcare: `{p['movement_score']} px`")
+                st.write(f"• Jucător **#{p['track_id']}** — Indice deplasare 2D: `{p['movement_score']}`")
 
         if view_mode.startswith("Comparație"):
             c_left, c_right = st.columns(2)

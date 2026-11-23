@@ -1,5 +1,6 @@
 import os
 import cv2
+import numpy as np
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
@@ -7,9 +8,6 @@ from backend.pitch_radar import generate_2d_tactical_pitch_map
 
 
 def extract_10s_clip(video_path: str, center_sec: float, output_clip_path: str, window_half: float = 5.0) -> bool:
-    """
-    Decupează un clip MP4 de 10 secunde (5s înainte + 5s după center_sec) din videoclipul adnotat.
-    """
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         return False
@@ -45,35 +43,73 @@ def extract_10s_clip(video_path: str, center_sec: float, output_clip_path: str, 
 
 def generate_visual_analytics(stats: dict, input_video_path: str, session_dir: str) -> dict:
     teams = stats["teams"]
-    fw = stats["video_info"]["width"]
-    fh = stats["video_info"]["height"]
+    sport = stats.get("sport", "Fotbal (Football)")
     annotated_video_path = os.path.join(session_dir, "annotated_video.mp4")
 
-    team_coords = {0: {"x": [], "y": []}, 1: {"x": [], "y": []}}
-    for frame in stats["frames"]:
+    tactical_frames = [f for f in stats["frames"] if f.get("is_tactical", True)]
+    if not tactical_frames:
+        tactical_frames = stats["frames"]
+
+    # Detectăm orientarea inițială (prima jumătate a cadrelor tactice) pentru a normaliza direcția de atac (stânga -> dreapta)
+    mid_idx = max(1, len(tactical_frames) // 2)
+    first_half_x = {0: [], 1: []}
+    for fr in tactical_frames[:mid_idx]:
+        for p in fr["players"]:
+            tid = p.get("team_id")
+            if tid in (0, 1):
+                first_half_x[tid].append(p.get("pitch_norm", (0.5, 0.5))[0])
+
+    # Dacă Echipa 0 începe în dreapta (> 0.52) față de Echipa 1 (< 0.48), o normalizăm spre dreapta
+    base_flip = {0: False, 1: False}
+    if first_half_x[0] and first_half_x[1]:
+        m0 = float(np.mean(first_half_x[0]))
+        m1 = float(np.mean(first_half_x[1]))
+        if m0 > m1:
+            base_flip[0] = True  # Echipa 0 ataca spre stânga în prima parte -> oglindim spre dreapta
+        else:
+            base_flip[1] = True  # Echipa 1 ataca spre stânga în prima parte -> oglindim spre dreapta
+
+    team_coords = {0: {"nx": [], "ny": []}, 1: {"nx": [], "ny": []}}
+    for idx, frame in enumerate(tactical_frames):
+        # Verificăm dacă în a doua jumătate a clipului echipele au schimbat terenul (pauză / 2ND HALF)
+        frame_x = {0: [], 1: []}
         for p in frame["players"]:
             tid = p.get("team_id")
             if tid in (0, 1):
-                team_coords[tid]["x"].append(p["position"][0])
-                team_coords[tid]["y"].append(p["position"][1])
+                frame_x[tid].append(p.get("pitch_norm", (0.5, 0.5))[0])
 
-    # Generăm Hărțile Tactice 2D ale terenului pentru fiecare echipă
+        halftime_swapped = False
+        if idx >= mid_idx and frame_x[0] and frame_x[1] and first_half_x[0] and first_half_x[1]:
+            init_diff = float(np.mean(first_half_x[0])) - float(np.mean(first_half_x[1]))
+            curr_diff = float(np.mean(frame_x[0])) - float(np.mean(frame_x[1]))
+            if (init_diff * curr_diff) < -0.02:
+                halftime_swapped = True
+
+        for p in frame["players"]:
+            tid = p.get("team_id")
+            if tid in (0, 1):
+                nx, ny = p.get("pitch_norm", (0.5, 0.5))
+                should_flip = base_flip[tid] ^ halftime_swapped
+                if should_flip:
+                    nx = 1.0 - nx
+                    ny = 1.0 - ny
+                team_coords[tid]["nx"].append(nx)
+                team_coords[tid]["ny"].append(ny)
+
     heatmap_urls = {}
     for t_id in (0, 1):
         t_info = teams[str(t_id)]
         h_filename = f"pitch_2d_team_{t_id}.png"
         h_path = os.path.join(session_dir, h_filename)
         generate_2d_tactical_pitch_map(
-            coords_x=team_coords[t_id]["x"],
-            coords_y=team_coords[t_id]["y"],
-            frame_w=fw,
-            frame_h=fh,
-            team_name=t_info["name"],
+            norm_x_list=team_coords[t_id]["nx"],
+            norm_y_list=team_coords[t_id]["ny"],
+            team_name=f"{t_info['name']} (Atac Stânga → Dreapta)",
+            sport=sport,
             save_path=h_path
         )
         heatmap_urls[str(t_id)] = h_filename
 
-    # Timeline dinamică atac/apărare
     timeline_path = os.path.join(session_dir, "timeline.png")
     events = stats["timeline_events"]
     t0_name = teams["0"]["name"]
@@ -90,7 +126,7 @@ def generate_visual_analytics(stats: dict, input_video_path: str, session_dir: s
             plt.stem([e["timestamp_sec"] for e in t1_ev], [e["players_count"] for e in t1_ev],
                      linefmt='r-', markerfmt='ro', basefmt=' ', label=f"Atac {t1_name}")
         plt.legend()
-    plt.title("Timeline Faze de Atac & Presiune pe Echipe")
+    plt.title(f"Timeline Faze & Evenimente ({sport} — Doar Cadre Tactice)")
     plt.xlabel("Timp Meci (secunde)")
     plt.ylabel("Jucători în Cadru")
     start_s = stats["video_info"].get("start_sec", 0)
@@ -100,7 +136,6 @@ def generate_visual_analytics(stats: dict, input_video_path: str, session_dir: s
     plt.savefig(timeline_path)
     plt.close()
 
-    # Extragem primele 3 momente cheie atât ca imagine, cât și ca clip video de 10s (5s înainte + 5s după)
     key_frames = []
     top_events = sorted(events, key=lambda x: x["players_count"], reverse=True)[:3]
     cap = cv2.VideoCapture(input_video_path)

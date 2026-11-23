@@ -7,7 +7,7 @@ from fastapi import FastAPI, UploadFile, File, Form, BackgroundTasks, HTTPExcept
 from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
 
-from backend.pipeline import VideoAnalysisPipeline
+from backend.pipeline import VideoAnalysisPipeline, rerender_swapped_video
 from backend.analytics import generate_visual_analytics, extract_10s_clip
 from backend.llm_service import generate_tactical_report
 from backend.youtube_service import download_youtube_video
@@ -34,6 +34,10 @@ def run_analysis_job(
     session_dir: str,
     team_a: str,
     team_b: str,
+    color_a: str,
+    color_b: str,
+    sport: str,
+    homography_corners: dict,
     youtube_url: Optional[str],
     video_title: str,
     start_sec: float,
@@ -55,6 +59,9 @@ def run_analysis_job(
             input_path,
             session_dir,
             team_names=(team_a, team_b),
+            color_hints=(color_a, color_b),
+            sport=sport,
+            homography_corners=homography_corners,
             start_sec=start_sec,
             duration_sec=duration_sec,
             model_name=model_name,
@@ -71,6 +78,7 @@ def run_analysis_job(
         result_payload = {
             "session_id": session_id,
             "video_title": video_title,
+            "sport": sport,
             "model_used": model_name,
             "tracker_used": tracker_name,
             "stats": {k: v for k, v in stats.items() if k != "frames"},
@@ -98,6 +106,8 @@ def run_analysis_job(
 
         jobs_status[session_id] = {"status": "completed", "progress": 100}
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         jobs_status[session_id] = {"status": "failed", "error": str(e)}
 
 
@@ -145,6 +155,10 @@ async def start_analysis(
     youtube_url: Optional[str] = Form(None),
     team_a: str = Form("Team A"),
     team_b: str = Form("Team B"),
+    color_a: str = Form("Auto-detect"),
+    color_b: str = Form("Auto-detect"),
+    sport: str = Form("Fotbal (Football)"),
+    homography_json: str = Form("{}"),
     start_sec: float = Form(0.0),
     duration_sec: float = Form(0.0),
     model_name: str = Form("yolov8n.pt"),
@@ -169,6 +183,10 @@ async def start_analysis(
         clean_url = youtube_url.strip()
 
     dur = duration_sec if duration_sec > 0 else None
+    try:
+        h_corners = json.loads(homography_json)
+    except Exception:
+        h_corners = {}
 
     jobs_status[session_id] = {"status": "queued", "progress": 0}
     background_tasks.add_task(
@@ -178,6 +196,10 @@ async def start_analysis(
         session_dir,
         team_a.strip() or "Team A",
         team_b.strip() or "Team B",
+        color_a,
+        color_b,
+        sport,
+        h_corners,
         clean_url,
         video_title,
         max(0.0, start_sec),
@@ -189,9 +211,46 @@ async def start_analysis(
     return {"session_id": session_id, "message": "Analysis started"}
 
 
+@app.post("/api/swap_teams/{session_id}")
+def swap_teams_and_video(session_id: str):
+    """
+    Inversează Echipa 1 și Echipa 2 atât în statistici, cât și în videoclipul randat + radarul 2D.
+    """
+    session_dir = os.path.join(STORAGE_DIR, session_id)
+    input_path = os.path.join(session_dir, "input.mp4")
+    result_file = os.path.join(session_dir, "final_result.json")
+
+    if not os.path.exists(input_path) or not os.path.exists(result_file):
+        raise HTTPException(status_code=404, detail="Sesiunea nu a fost găsită.")
+
+    with open(result_file, "r") as f:
+        old_payload = json.load(f)
+
+    updated_stats = rerender_swapped_video(input_path, session_dir)
+    visuals = generate_visual_analytics(updated_stats, input_path, session_dir)
+    report = generate_tactical_report(updated_stats, visuals["key_frames"], session_dir)
+
+    old_payload["stats"] = {k: v for k, v in updated_stats.items() if k != "frames"}
+    old_payload["tactical_report"] = report
+    old_payload["visuals"]["key_frames"] = [
+        {
+            "url": f"/files/{session_id}/{kf['filename']}",
+            "clip_url": f"/files/{session_id}/{kf['clip_filename']}" if kf.get("clip_filename") else None,
+            "timestamp_sec": kf["timestamp_sec"],
+            "attacking_team": kf["attacking_team"],
+            "flank": kf.get("flank", "Centru"),
+            "players_count": kf["players_count"]
+        } for kf in visuals["key_frames"]
+    ]
+
+    with open(result_file, "w") as f:
+        json.dump(old_payload, f, indent=2)
+
+    return old_payload
+
+
 @app.get("/api/sessions")
 def list_saved_sessions():
-    """Returnează toate analizele salvate în storage/ pentru reîncărcare instantă."""
     sessions = []
     if not os.path.exists(STORAGE_DIR):
         return sessions
@@ -203,9 +262,10 @@ def list_saved_sessions():
                     d = json.load(f)
                 t0 = d["stats"]["teams"]["0"]["name"]
                 t1 = d["stats"]["teams"]["1"]["name"]
+                sp = d.get("sport", "Sport").split(" ")[0]
                 sessions.append({
                     "session_id": name,
-                    "label": f"{d.get('video_title', 'Clip')} — {t0} vs {t1} ({name})"
+                    "label": f"[{sp}] {d.get('video_title', 'Clip')} — {t0} vs {t1} ({name})"
                 })
             except Exception:
                 pass
@@ -214,10 +274,6 @@ def list_saved_sessions():
 
 @app.post("/api/extract_phase/{session_id}")
 def extract_custom_phase_clip(session_id: str, timestamp_sec: float = Form(...)):
-    """
-    Decupează la cerere o fază de 10 secunde (5s înainte + 5s după timestamp_sec)
-    din videoclipul adnotat (cu tot cu radarul 2D live).
-    """
     session_dir = os.path.join(STORAGE_DIR, session_id)
     annotated_video = os.path.join(session_dir, "annotated_video.mp4")
     result_file = os.path.join(session_dir, "final_result.json")
