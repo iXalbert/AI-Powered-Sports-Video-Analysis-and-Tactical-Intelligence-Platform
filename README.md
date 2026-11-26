@@ -1,117 +1,150 @@
 # AI-Powered Sports Video Analysis & Tactical Intelligence Platform
 
-An end-to-end computer vision and multimodal AI application that transforms recorded sports footage into player tracking, visual analytics, event statistics, and automated, evidence-grounded tactical summaries.
+An end-to-end computer vision and multimodal AI platform that transforms recorded sports footage into multi-object player & ball tracking, 2D tactical radar projections, deterministic event analytics, hardware/model benchmarks, and evidence-grounded tactical reports.
 
 ---
 
 ## 1. Problema (Problem Statement)
 
 ### Ce rezolvă și cu ce ajută
-Analiza meciurilor de sport pe baza înregistrărilor video necesită în mod tradițional un efort manual considerabil din partea antrenorilor și analiștilor pentru extragerea statisticilor, urmărirea jucătorilor și identificarea tiparelor tactice. 
+Analiza meciurilor de sport pe baza înregistrărilor video necesită în mod tradițional un efort manual considerabil din partea antrenorilor și analiștilor pentru extragerea statisticilor, urmărirea jucătorilor și identificarea tiparelor tactice.
 
-Această platformă automatizează procesul prin procesarea secvențelor video, detectarea și urmărirea jucătorilor (player tracking), extragerea de evenimente-cheie (key events) și generarea automată de rapoarte tactice în limbaj natural.
+Această platformă automatizează întregul flux prin procesarea secvențelor video (fișiere locale sau link-uri YouTube), filtrarea cadrelor non-tactice (reluări, prim-planuri), detectarea și urmărirea jucătorilor și a mingii, proiecția 2D a pozițiilor pe teren, extragerea de evenimente-cheie și generarea automată de rapoarte tactice în limbaj natural.
 
-### Obiectivele Proiectului 
-1. **Pipeline de procesare video cap-la-cap:** Construirea unui sistem integrat (Upload $\rightarrow$ Detectare/Tracking $\rightarrow$ Analitică $\rightarrow$ Raport AI) pentru un sport selectat (ex: fotbal, baschet, handbal).
-2. **Generare de analiză vizuală și statistici deterministe:** Calcularea mecanică (fără LLM) a minim 3-4 tipuri de evenimente și generarea de vizualizări specifice (mărci de traiectorie, hărți de căldură / heatmaps, timeline de meci).
-3. **Sinteză tactică bazată pe ML/LLM/VLM:** Utilizarea modelelor de viziune și limbaj (Vision-Language & Large Language Models) pentru explicarea contextului vizual și redactarea de observații tactice ancorate strict în date reale.
-4. **Validare riguroasă și benchmark dedicat:** Evaluarea cantitativă și calitativă a acurateței detecției, a latenței de procesare și a calității rezumatelor pe un set de date controlat și adnotat manual.
+### Obiectivele Proiectului
+1. **Pipeline de procesare video multi-sport cap-la-cap:** Construirea unui sistem integrat (*Upload / YouTube $\rightarrow$ Camera Filtering $\rightarrow$ Detection & Tracking $\rightarrow$ 2D Homography & Analytics $\rightarrow$ Multimodal AI Report*) adaptat pentru sporturi de echipă (Fotbal, Handbal, Baschet, Fotbal American).
+2. **Clasificare automată a echipelor și calibrare spațială:** Separarea jucătorilor pe echipe folosind clustering nesupervizat (K-Means în spațiul de culoare CIELAB) asistat de citirea automată a tabelei de scor (OCR) și maparea coordonatelor din imagine pe un teren 2D normalizat (radar tactic).
+3. **Analitică deterministă și sinteze tactice ancorate în date (Grounded VLM/LLM):** Calcularea mecanică a evenimentelor de joc (atacuri pe flancuri, schimbări de posesie, zone de presiune, heatmaps, timeline) și generarea rapoartelor tactice folosind modele multimodale alimentate exclusiv cu statistici verificate și cadre-cheie.
+4. **Benchmarking comparativ și validare Ground-Truth:** Evaluarea cantitativă a modelelor de detecție (YOLOv8, YOLO11, RT-DETR), a algoritmilor de tracking (ByteTrack, BoT-SORT) și a acurateței detecției evenimentelor față de adnotări manuale.
 
 ---
 
 ## 2. Documentație și Stadiul Actual (Related Work & State of the Art)
 
-Sistemele comerciale de analiză sportivă folosesc de obicei echipamente speciale multisenzor sau rețele de camere calibrate (ex: Tracab, Hawk-Eye, Veo). Proiectele open-source și lucrările recente de cercetare se concentrează pe combinarea detectoarelor bazate pe rețele neuronale de tip YOLO cu algoritmi moderni de urmărire multi-obiect (MOT).
+Sistemele comerciale de analiză sportivă (ex: Tracab, Hawk-Eye, Veo) depind de camere calibrate dedicate sau echipamente multisenzor costisitoare. Proiectele moderne de cercetare și soluțiile open-source urmăresc obținerea unor metrici similare direct din fluxuri video standard (broadcast TV sau camere tactice), combinând detectoare bazate pe rețele neuronale cu algoritmi rapizi de asociere temporală (MOT).
 
-### Soluții existente și referințe
-* **[YOLOv8 / YOLOv11 (Ultralytics)](https://github.com/ultralytics/ultralytics):** Standardul curent în detecția obiectelor în timp real, ideal pentru detecția jucătorilor și a mingii.
-* **[ByteTrack](https://github.com/ifzhang/ByteTrack):** Un tracker multi-obiect extrem de eficient care asociază detecțiile chiar și în cazul ocluziilor temporare sau al scorurilor scăzute de detecție.
-* **[Roboflow Supervision](https://github.com/roboflow/supervision):** Set de instrumente reutilizabile pentru procesare de cadre, desenare de overlays, Zone Analytics și numărare de entități.
-* **[OpenCV](https://opencv.org/) & [FFmpeg](https://ffmpeg.org/):** Librării fundamentale pentru decodare video, sampling de cadre și manipulare spațio-temporală.
-* **Modele VLM / LLM (ex: OpenAI GPT-4o, Google Gemini, Anthropic Claude):** Utilizate pentru interpretarea semantică a cadrelor extras și structurarea rezumatelor explicative.
-* **[FlashScore](https://www.flashscore.ro):** Aplicație de sporturi ce generează output-uri similare cu cele ale aplicației noastre.
+### Tehnologii și Referințe Cheie
+* **[Ultralytics YOLOv8 / YOLO11 & RT-DETR](https://github.com/ultralytics/ultralytics):** Modele de detecție a obiectelor în timp real (arhitecturi CNN și Vision Transformer) utilizate pentru detectarea jucătorilor și a mingii, cu suport pentru accelerare hardware (Apple Silicon MPS / CUDA / CPU).
+* **[ByteTrack](https://github.com/ifzhang/ByteTrack) & [BoT-SORT](https://github.com/NirAharon/BoT-SORT):** Algoritmi de urmărire multi-obiect (MOT) care mențin ID-uri persistente pentru jucători în condiții de ocluzie și mișcare a camerei.
+* **[Roboflow Supervision](https://github.com/roboflow/supervision):** Librărie pentru gestionarea detecțiilor, tracking și adnotări vizuale pe cadre video.
+* **[EasyOCR](https://github.com/JaidedAI/EasyOCR) & [OpenCV](https://opencv.org/):** Utilizate pentru recunoașterea automată a abrevierilor echipelor din tabela de scor (scoreboard), extragerea culorilor dominante în spațiul CIELAB, transformări projective (homografie) și procesare video.
+* **Modele Multimodale VLM / LLM (Google Gemini / OpenAI):** Utilizate pentru interpretarea semantică a cadrelor-cheie și redactarea rapoartelor tactice structurate.
+* **[FlashScore](https://www.flashscore.ro):** Referință pentru prezentarea structurată a statisticilor de meci și a cronologiei evenimentelor.
 
 ### Cu ce este mai bun acest proiect?
-Spre deosebire de soluțiile clasice de Computer Vision (care oferă doar metrice brute precum hărți de căldură) sau de abordările pur LLM (care pot fi susceptibile la halucinații), această aplicație combină **analitica deterministă** cu **raționamentul multimodal (VLM/LLM)**. Modelul de limbaj primește ca date de intrare doar statistici verified și cadre-cheie, garantând că observațiile tactice sunt complet ancorate în date concrete.
+Spre deosebire de instrumentele pur vizuale (care afișează doar bounding boxes și hărți de căldură brute) sau de abordările pur generative (susceptibile la halucinații), platforma combină **analitica deterministă** (calibrare colorimetrică a echipelor, filtrare a cadrelor non-tactice, homografie 2D) cu **raționamentul multimodal ancorat în dovezi**. Totodată, include nativ un modul de **benchmarking** și **evaluare Ground-Truth** pentru compararea obiectivă a modelelor CV.
 
 ---
 
 ## 3. Proiectare (Architecture & Design)
 
 ### Arhitectura Sistemului
-Aplicația folosește o arhitectură decuplată pe microservicii sau modules, asigurând procesarea asincronă a fișierelor video de dimensiuni mari.
+Aplicația este structurată decuplat într-un frontend interactiv (Streamlit) și un backend asincron (FastAPI) care orchestrează pipeline-ul de Computer Vision, generarea vizualizărilor și modulul de benchmarking:
 
+```text
+[ Frontend Dashboard (Streamlit - frontend/app.py) ]
+                       │  (REST API / JSON / Video Streams)
+                       ▼
+[ Backend Orchestrator (FastAPI - backend/main.py) ]
+       │                                       │
+       ▼                                       ▼
+[ Video Analysis Pipeline ]             [ Benchmark & Evaluation Engine ]
+  ├── YouTube Downloader (yt-dlp)         ├── Multi-Model / Tracker Runner
+  ├── Scoreboard OCR (EasyOCR)            ├── Latency & FPS Profiler
+  ├── Camera Angle Filter                 └── Ground-Truth Event Evaluator
+  ├── Detection (YOLO / RT-DETR)
+  ├── Tracking (ByteTrack / BoT-SORT)   [ Local Session Storage (storage/) ]
+  ├── Team Classifier (CIELAB K-Means)    ├── annotated_video.mp4 (Video + 2D Radar)
+  ├── 2D Homography & Analytics           ├── heatmaps & timeline.png
+  └── Multimodal Report (VLM / LLM)       └── tracking_data.json & final_result.json
 ```
-[ Client Web / Dashboard ]
-           │
-           ▼
-[ Backend / Orchestrator API (FastAPI) ]
-           │
-  ┌────────┴───────────────────────────┐
-  ▼                                   ▼
-[ Video Processing Pipeline ]   [ Data & Results Storage ]
-  ├── Frame Sampler & Preprocessor     ├── Raw / Processed Videos
-  ├── Detection (YOLO)                 ├── Detections & Tracks (JSON/DB)
-  ├── Tracking (ByteTrack)             └── Reports & Timeline
-  ├── Analytics Engine (Heatmaps/Events)
-  └── Multimodal AI Layer (VLM / LLM)
-```
 
-### Tehnologii Propuse
-* **Frontend:** React / Next.js / Tailwind CSS (Dashboard interactiv cu player video, timeline și grafice).
-* **Backend:** Python (FastAPI / Celery pentru task-uri asincrone).
-* **Computer Vision / AI Core:** PyTorch, OpenCV, `ultralytics` (YOLO), `supervision`, ByteTrack.
-* **Multimodal / Reasoning:** API-uri OpenAI/Gemini/Anthropic sau modele open-weights rulate local/cloud.
-* **Stocare:** SQLite/PostgreSQL pentru date de sesiune și metadata, sistem de fișiere local/S3 pentru cadre și videoclipuri.
+### Stack Tehnologic
+* **Frontend:** Python, Streamlit (configurare analiză, selecție interactivă a colțurilor terenului pentru homografie, player video sincronizat, inversare rapidă a echipelor, explorator de faze la secundă și tab de benchmarking).
+* **Backend API:** Python, FastAPI, Uvicorn, BackgroundTasks pentru procesare asincronă cu urmărirea progresului în timp real.
+* **Computer Vision & ML:** PyTorch, Ultralytics (`yolov8n`, `yolov8s`, `yolo11n`, `rtdetr-l` și suport pentru modele fine-tuned pe sport), `supervision`, OpenCV, NumPy, scikit-learn (K-Means), EasyOCR.
+* **Multimodal AI & Media:** Google Gemini / OpenAI API pentru rapoarte tactice, `yt-dlp` pentru ingestie video din YouTube, Matplotlib/Seaborn pentru grafice analitice și benchmark.
 
-### Soluții de Design și Optimizare (2 Soluții Tehnic-Aplicate)
-1. **Soluția de procesare asincronă și eșantionare (Sampling):** Pentru a reduce latența și costurile computaționale, video-ul nu este analizat cadru cu cadru la rata întreagă de FPS pentru LLM; se aplică frame-sampling flexibil (ex: 5-10 FPS) pentru modulul CV, iar VLM-ul este apelat exclusiv pe cadre-cheie declanșate de evenimente.
-2. **Soluția ancorării datelor (Grounded Tactical Insights):** Prevenirea halucinațiilor LLM prin forțarea generării de output-uri JSON structurate bazate strict pe datele matematice extrapolate (frecvență atacuri, poziții medii, faze de posesie).
+### Soluții Cheie de Design și Optimizare
+1. **Filtrarea Cadrelor Non-Tactice & Calibrare Hibridă a Echipelor:** Un clasificator de cameră (`camera_classifier.py`) detectează cadrele de tip *close-up*, reluări sau unghiuri din spatele porții și îngheață radarul tactic pe ultimele poziții valide. Clasificarea jucătorilor combină eșantionarea culorilor din tabela de scor (`scoreboard_reader.py`) cu clustering K-Means în spațiul perceptiv **CIELAB**.
+2. **Ancorarea Datelor pentru Raportul AI (Grounded Tactical Insights) & Swap Instant:** LLM-ul primește exclusiv metricile deterministe calculate (posesie estimată, distribuția atacurilor pe flancuri, evenimente cronologice) și cadre-cheie extrase automat. În plus, sistemul permite inversarea instantanee a echipelor (`rerender_swapped_video`) direct din datele salvate în `tracking_data.json`, fără a re-rula detecția neurală.
 
 ---
 
 ## 4. Implementare (Implementation Details)
 
-Pipeline-ul principal de analiză este structurat în 9 etape consecutive:
+### Structura Proiectului
+```text
+├── backend/
+│   ├── main.py                 # Endpoint-uri FastAPI, gestionare sesiuni și job-uri asincrone
+│   ├── pipeline.py             # Pipeline-ul CV: detecție, tracking, clasificare echipe, radar 2D
+│   ├── camera_classifier.py    # Filtrarea cadrelor tactice vs. reluări / close-up-uri
+│   ├── scoreboard_reader.py    # Detecție OCR a echipelor și culorilor din tabela de scor
+│   ├── analytics.py            # Generare heatmaps, timeline evenimente și clipuri de 10s
+│   ├── llm_service.py          # Generarea raportului tactic multimodal ancorat în statistici
+│   ├── benchmark.py            # Evaluare performanță (FPS/latență) și acuratețe Ground-Truth
+│   └── youtube_service.py      # Descărcare și decupare segmente video din YouTube
+├── frontend/
+│   └── app.py                  # Interfața web Streamlit (Analiză Meci, Sesiuni Salvate, Benchmark)
+├── storage/                    # Artefacte generate per sesiune (video adnotat, JSON, grafice)
+└── requirements.txt            # Dependențele Python ale proiectului
+```
 
-1. **Upload & Session Setup:** Încărcarea fișierului video ($10-15$ minute) și crearea unei sesiuni de analiză.
-2. **Decoding & Frame Sampling:** Decodarea prin OpenCV/FFmpeg la o rată configurabilă de cadre.
-3. **Player Detection:** Rularea detecției cu un model pre-antrenat (ex: YOLOv8) direct pe cadrele eșantionate.
-4. **Multi-Object Tracking:** Asocierea detecțiilor între cadre utilizând ByteTrack și atribuirea de ID-uri unice persistente pentru fiecare jucător.
-5. **Spatial & Trajectory Aggregation:** Calcularea coordonatelor spațiale, generarea hărților de căldură (heatmaps) și definirea zonelor de teren.
-6. **Rule-Based Event Inference:** Aplicarea unei logici deterministe pentru identificarea a 3-4 evenimente specifice sportului (ex: șuturi, faze de atac pe benzi, schimbări de posesie).
-7. **Key-Clip & Timestamp Extraction:** Extragerea automată a cadrelor și secvențelor reprezentative din preajma momentelor importante.
-8. **VLM/LLM Interpretation:** Trimiterea evidențelor selectate (date structurate + cadre reprezentative) către modelul AI pentru analiză contextuală.
-9. **Dashboard Rendering:** Renders-ul final în interfața grafică (video cu overlay de urmărire, timeline interactiv, componente grafice și raportul tactic generat).
-
----
-
-## 5. Testare și Evaluare (Testing & Performance)
-
-Evaluarea aplicației se bazează pe experimente controlate folosind un set redus de date adnotat manual (ground-truth benchmark în format JSON/CSV).
-
-### Strategie de Testare
-* **Unit Testing:** Teste unitare pentru modulele deterministe de calcul al statisticilor, parsarea metadatelor video, algoritmul de agregare a pozițiilor și generarea structurilor de date JSON.
-* **System / End-to-End Testing:** Verificarea pipeline-ului complet de la încărcarea fișierului până la popularea dashboard-ului.
-
-### Evaluări și Metrici
-1. **Acuratețea detecției și a evenimentelor (CV Accuracy):** Compararea numărului și a marjei temporale (timestamp tolerance) pentru evenimentele detectate automat față de adnotările manuale din setul de test.
-2. **Performanță și Latență (Latency & Throughput):** Măsurarea timpului total de procesare ($E2E$ latency) și a cadrelor procesate pe secundă (FPS) pentru fișiere cu rezoluții și durate diferite (ex: 720p vs 1080p).
-3. **Calitatea rezumatelor tactice (Human Rubric Evaluation):** Evaluarea rezumatului generat de VLM/LLM de către un evaluator uman pe baza unei rubrici cu 3 criterii: *Corectitudine factuală*, *Relevanță tactică* și *Utilitate*.
+### Etapele Pipeline-ului de Analiză
+1. **Ingestie & Preprocesare:** Încărcarea unui clip video local sau descărcarea unui interval specific (`start_sec`, `duration_sec`) de pe YouTube.
+2. **Calibrare Inițială (Scoreboard & Echipamente):** Extragerea numelor/culorilor din tabela de scor (dacă este vizibilă) și antrenarea clasificatorului de echipe pe primele cadre tactice valide.
+3. **Detecție & Multi-Object Tracking:** Rularea modelului selectat (ex. `yolov8n.pt`, `yolov8s.pt`, `rtdetr-l.pt` sau modele fine-tuned pe sport) și asocierea ID-urilor persistente cu ByteTrack / BoT-SORT.
+4. **Proiecție 2D (Homografie) & Radar Live:** Maparea pozițiilor jucătorilor și ale mingii pe terenul 2D (folosind fie colțurile calibrate manual de utilizator, fie mapare normalizată) și randarea video-ului compus (cadru adnotat + radar tactic sincronizat).
+5. **Analitică Deterministă & Extragere Faze:** Identificarea fazelor de atac (stânga, centru, dreapta), schimbărilor de posesie, generarea hărților de căldură (`heatmap_team_0.png`, `heatmap_team_1.png`), a graficului cronologic (`timeline.png`) și decuparea automată a clipurilor video de 10 secunde pentru fazele-cheie.
+6. **Sinteză Tactică VLM/LLM & Export:** Generarea raportului tactic structurat și salvarea întregii sesiuni pentru reîncărcare ulterioară.
 
 ---
 
-## 6. Concluzii (Conclusions)
+## 5. Testare și Evaluare (Testing & Evaluation)
 
-### Legate de Aplicație
-Sistemul dezvoltat demonstrează că se poate construi o platformă funcțională de inteligență tactică sportivă fără a fi necesară antrenarea de la zero a modelelor complexe de viziune. Integrarea modelelor pre-antrenate de detecție/tracking cu puterea de sintetizare a LLM-urilor moderne oferă un instrument util și accesibil pentru analiza meciurilor.
+Platforma include un modul dedicat de evaluare (`backend/benchmark.py`), accesibil direct din interfața grafică, care măsoară obiectiv compromisul dintre viteză și acuratețe:
 
-### Ce am învățat
-* Integrarea și orchestrarea modelelor moderne de Computer Vision (YOLO, ByteTrack) într-un pipeline continuu.
-* Arhitecturarea aplicațiilor asistate de LLM/VLM în care modelele generative sunt folosite strict pe post de strat de raționament explicativ, prevenind halucinațiile prin grounding pe date matematice brute.
-* Metodologia de evaluare obiectivă a sistemelor AI hibride prin metrici de latență, acuratețe temporală și evaluare calitativă structurată.
+### 1. Benchmark de Performanță și Stabilitate (Model $\times$ Tracker $\times$ Hardware)
+* **Configurații testate:** Compararea arhitecturilor de detecție (`yolov8n.pt`, `yolov8s.pt`, `yolo11n.pt`, `rtdetr-l.pt`) combinate cu trackere (`bytetrack.yaml`, `botsort.yaml`) pe dispozitive hardware diferite (`mps`, `cpu`, `cuda`).
+* **Metrici colectate:** Latența medie per cadru (ms), throughput-ul (FPS), stabilitatea ID-urilor de tracking și rata de detecție a mingii/jucătorilor, exportate automat în `benchmark_results.csv` și grafice comparative (`latency_fps_comparison.png`, `detection_stability_comparison.png`).
 
-### Ce ne așteptăm / Direcții viitoare (Future Work)
-* **Ball Tracking & Pitch Calibration:** Extinderea detecției la minge și maparea coordonatelor din imagine pe un model 2D normalizat al terenului.
-* **Natural Language Querying:** Interfață de căutare în limbaj natural (ex: *"Arată-mi atacurile create pe partea dreaptă în repriza a doua"*).
-* **Automatic Highlight Reel Generation:** Asamblarea automată a unui clip video restrâns cu cele mai importante momente tactice din meci.
+### 2. Evaluare Ground-Truth a Evenimentelor Tactice
+* **Metodologie:** Compararea evenimentelor detectate automat în `timeline_events` cu un fișier JSON de adnotări manuale (Ground-Truth), aplicând o fereastră de toleranță temporală configurabilă (ex: $\pm 3.0$ secunde).
+* **Metrici:** *Precision*, *Recall*, *F1-Score* și eroarea medie temporală (MAE în secunde).
+
+### 3. Evaluare Calitativă a Rapoartelor Tactice
+* Verificarea consistenței între cifrele raportate de motorul determinist și afirmațiile generate de modelul VLM/LLM (corectitudine factuală, relevanță tactică și utilitate practică).
+
+---
+
+## 6. Rulare Locală (Quick Start)
+
+1. **Activarea mediului virtual și instalarea dependențelor:**
+   ```bash
+   python3 -m venv venv
+   source venv/bin/activate
+   pip install -r requirements.txt
+   ```
+2. **Configurarea variabilelor de mediu:**
+   Creează un fișier `.env` în rădăcina proiectului cu cheia API pentru raportul tactic (ex: `GEMINI_API_KEY=...` sau `OPENAI_API_KEY=...`).
+3. **Pornirea serverului Backend (FastAPI):**
+   ```bash
+   uvicorn backend.main:app --reload
+   ```
+4. **Pornirea interfeței Frontend (Streamlit) într-un al doilea terminal:**
+   ```bash
+   source venv/bin/activate
+   streamlit run frontend/app.py --server.address 0.0.0.0
+   ```
+
+---
+
+## 7. Concluzii și Direcții Viitoare (Conclusions & Future Work)
+
+### Concluzii
+Platforma demonstrează că o arhitectură hibridă — care combină detectoare și trackere moderne de Computer Vision, algoritmi determiniști de calibrare colorimetrică/spațială și modele multimodale ancorate în date — poate livra o analiză tactică completă din înregistrări video standard, fără hardware specializat.
+
+### Direcții Viitoare (Roadmap)
+* **Modele Fine-Tuned Specifice pe Sport:** Antrenarea și integrarea unor ponderi dedicate (`football_yolov8.pt`, `basketball_yolov8.pt`, `handball_yolov8.pt`) cu clase native (`player`, `goalkeeper`, `referee`, `ball`) pentru creșterea ratei de detecție a mingii la distanță și eliminarea automată a arbitrilor din calculul posesiei.
+* **Homografie Automată (Pitch Keypoint Detection):** Detectarea automată a marcajelor terenului (linii de careu, cerc median, colțuri) folosind un model de tip *pose/keypoints* pentru eliminarea calibrării manuale pe cadre cu cameră mobilă.
+* **Interogare Tactică în Limbaj Natural (Natural Language Video Querying):** Căutare semantică peste sesiunile procesate (ex: *"Arată-mi toate atacurile pe flancul drept din ultimele 5 minute"*).
