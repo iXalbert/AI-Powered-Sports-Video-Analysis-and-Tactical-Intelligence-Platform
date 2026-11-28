@@ -30,6 +30,27 @@ def get_sport_event_labels(sport: str) -> dict:
     return {"pass": "Pasă", "shot": "Șut spre poartă", "chance": "Ocazie / Fază periculoasă"}
 
 
+def resolve_sport_class_ids(model) -> tuple[list[int], list[int]]:
+    """
+    Detectează automat ID-urile claselor pentru jucători și minge din model.names,
+    suportând atât modele generice COCO, cât și modele fine-tuned pe sport.
+    """
+    names = {int(k): str(v).lower().strip() for k, v in model.names.items()}
+    player_ids = [
+        cid for cid, name in names.items()
+        if name in ("person", "player", "goalkeeper", "players")
+    ]
+    ball_ids = [
+        cid for cid, name in names.items()
+        if name in ("sports ball", "ball", "football", "soccer ball")
+    ]
+    if not player_ids:
+        player_ids = [0]
+    if not ball_ids:
+        ball_ids = [32]
+    return player_ids, ball_ids
+
+
 class VideoAnalysisPipeline:
     def __init__(self, model_name: str = "yolov8n.pt"):
         if torch.backends.mps.is_available():
@@ -66,6 +87,7 @@ class VideoAnalysisPipeline:
 
         span = max(1, end_frame - start_frame)
         step = max(1, span // max_sample_frames)
+        player_class_ids, _ = resolve_sport_class_ids(self.model)
 
         current_frame = start_frame
         sampled = 0
@@ -74,9 +96,8 @@ class VideoAnalysisPipeline:
             if not ret:
                 break
             if (current_frame - start_frame) % step == 0:
-                results = self.model(frame, classes=[0], device=self.device, verbose=False)[0]
+                results = self.model(frame, classes=player_class_ids, device=self.device, verbose=False)[0]
                 detections = sv.Detections.from_ultralytics(results)
-                # Calibrăm culorile DOAR din cadre tactice largi (evităm zoom pe un singur jucător / antrenor)
                 is_tact, _ = cam_filter.classify_frame(frame, detections.xyxy)
                 if is_tact:
                     for xyxy in detections.xyxy:
@@ -202,7 +223,6 @@ class VideoAnalysisPipeline:
         last_ball_norm = None
         ball_missing_streak = 0
 
-        # Stare înghețată pentru radar în timpul close-up-urilor / reluărilor
         frozen_radar_players = []
         frozen_radar_ball = None
         frozen_attacking_team = None
@@ -224,6 +244,9 @@ class VideoAnalysisPipeline:
         out_fps = fps / frame_stride
         out = cv2.VideoWriter(output_video_path, fourcc, out_fps, (video_info.width, combined_h))
 
+        player_class_ids, ball_class_ids = resolve_sport_class_ids(self.model)
+        target_classes = player_class_ids + ball_class_ids
+
         frame_idx = start_frame
         processed_count = 0
 
@@ -240,17 +263,16 @@ class VideoAnalysisPipeline:
                 frame,
                 persist=True,
                 tracker=tracker_name,
-                classes=[0, 32],
+                classes=target_classes,
                 conf=0.16,
                 device=self.device,
                 verbose=False
             )[0]
             all_dets = sv.Detections.from_ultralytics(results)
 
-            player_dets = all_dets[all_dets.class_id == 0]
-            ball_dets = all_dets[all_dets.class_id == 32]
+            player_dets = all_dets[np.isin(all_dets.class_id, player_class_ids)]
+            ball_dets = all_dets[np.isin(all_dets.class_id, ball_class_ids)]
 
-            # Verificăm dacă acest cadru este o vedere tactică largă sau un close-up / reluare
             is_tactical, cam_reason = cam_filter.classify_frame(frame, player_dets.xyxy)
             if is_tactical:
                 tactical_frames_count += 1
@@ -314,7 +336,6 @@ class VideoAnalysisPipeline:
                 by = float(xyxy[3])
                 nx, ny = mapper.map_point(cx, by)
 
-                # Actualizăm distanțele și pozițiile doar în cadrele tactice valide
                 if is_tactical and stable_team in (0, 1):
                     team_norm_x[stable_team].append(nx)
                     team_norm_y[stable_team].append(ny)
@@ -452,7 +473,6 @@ class VideoAnalysisPipeline:
                     })
                     last_event_frame["chance"] = frame_idx
 
-                # Salvăm starea validă pentru radar
                 frozen_radar_players = frame_record["players"]
                 frozen_radar_ball = current_ball_norm
                 frozen_attacking_team = frame_record["attacking_team"]
@@ -462,7 +482,6 @@ class VideoAnalysisPipeline:
                     cv2.rectangle(annotated, (10, 10), (590, 42), (20, 20, 20), -1)
                     cv2.putText(annotated, phase_banner, (20, 32), cv2.FONT_HERSHEY_SIMPLEX, 0.52, (255, 255, 255), 2)
             else:
-                # Resetăm continuitatea pozițiilor între tăieturi de cameră pentru a nu calcula distanțe false
                 last_positions.clear()
                 prev_ball_norm = None
                 cv2.rectangle(annotated, (10, 10), (460, 42), (30, 30, 140), -1)
@@ -542,6 +561,7 @@ class VideoAnalysisPipeline:
             json.dump(summary_stats, f, indent=2)
 
         return summary_stats
+
 
 def rerender_swapped_video(input_path: str, session_dir: str) -> dict:
     """

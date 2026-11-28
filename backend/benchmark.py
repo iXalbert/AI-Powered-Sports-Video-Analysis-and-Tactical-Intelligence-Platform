@@ -11,6 +11,7 @@ import matplotlib.pyplot as plt
 from ultralytics import YOLO, RTDETR
 from sklearn.metrics import silhouette_score
 from backend.team_classifier import TeamClassifier
+from backend.pipeline import resolve_sport_class_ids
 
 
 BENCHMARK_DIR = "benchmarks"
@@ -31,6 +32,8 @@ def run_single_configuration(
     max_frames: int = 120
 ) -> dict:
     model = _load_model(model_name)
+    player_class_ids, ball_class_ids = resolve_sport_class_ids(model)
+    target_classes = player_class_ids + ball_class_ids
     classifier = TeamClassifier(outlier_threshold=72.0)
 
     cap = cv2.VideoCapture(video_path)
@@ -46,7 +49,7 @@ def run_single_configuration(
         ret, warm_frame = cap.read()
         if not ret:
             break
-        _ = model(warm_frame, classes=[0, 32], device=device, verbose=False)
+        _ = model(warm_frame, classes=target_classes, device=device, verbose=False)
 
     cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
 
@@ -56,7 +59,7 @@ def run_single_configuration(
         ret, frame = cap.read()
         if not ret:
             break
-        res = model(frame, classes=[0], device=device, verbose=False)[0]
+        res = model(frame, classes=player_class_ids, device=device, verbose=False)[0]
         dets = sv.Detections.from_ultralytics(res)
         for xyxy in dets.xyxy:
             classifier.collect_sample(frame, xyxy)
@@ -83,7 +86,7 @@ def run_single_configuration(
             frame,
             persist=True,
             tracker=tracker_name,
-            classes=[0, 32],
+            classes=target_classes,
             conf=0.18,
             device=device,
             verbose=False
@@ -97,8 +100,8 @@ def run_single_configuration(
         latencies_ms.append((t1 - t0) * 1000.0)
 
         all_dets = sv.Detections.from_ultralytics(results)
-        dets = all_dets[all_dets.class_id == 0]
-        b_dets = all_dets[all_dets.class_id == 32]
+        dets = all_dets[np.isin(all_dets.class_id, player_class_ids)]
+        b_dets = all_dets[np.isin(all_dets.class_id, ball_class_ids)]
 
         detections_per_frame.append(len(dets))
         if len(b_dets) > 0:

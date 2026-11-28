@@ -139,7 +139,7 @@ with tab_match:
         with m_col1:
             selected_match_model = st.selectbox(
                 "Model Detecție:",
-                ["yolov8n.pt", "yolov8s.pt", "yolov8m.pt", "yolo11n.pt", "yolo11s.pt", "yolov5su.pt", "rtdetr-l.pt"],
+                ["yolov8n.pt", "yolov8s.pt", "yolov8m.pt", "yolo11n.pt", "yolo11s.pt", "yolov5su.pt", "rtdetr-l.pt", "models/football_yolov8.pt"],
                 index=0
             )
         with m_col2:
